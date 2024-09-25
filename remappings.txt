@@ -1,0 +1,12 @@
+@mgv/src/=lib/mangrove-core/src/
+@mgv/lib/=lib/mangrove-core/lib/
+@mgv/test/=lib/mangrove-core/test/
+@mgv/script/=lib/mangrove-core/script/
+@mgv/forge-std/=lib/forge-std/src/
+
+@mgv-strats/src/=lib/mangrove-strats/src/
+@mgv-strats/lib/=lib/mangrove-strats/lib/
+@mgv-strats/test/=lib/mangrove-strats/test/
+@mgv-strats/script/=lib/mangrove-strats/script/
+
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/

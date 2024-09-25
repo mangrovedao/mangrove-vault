@@ -1,3 +1,12 @@
 [submodule "lib/forge-std"]
 	path = lib/forge-std
 	url = https://github.com/foundry-rs/forge-std
+[submodule "lib/mangrove-strats"]
+	path = lib/mangrove-strats
+	url = https://github.com/mangrovedao/mangrove-strats
+[submodule "lib/mangrove-core"]
+	path = lib/mangrove-core
+	url = https://github.com/mangrovedao/mangrove-core
+[submodule "lib/openzeppelin-contracts"]
+	path = lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts
