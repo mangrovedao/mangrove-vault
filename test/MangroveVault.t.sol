@@ -49,13 +49,13 @@ contract MangroveVaultTest is Test {
   }
 
   function copyMangrove() internal {
-    (Market[] memory markets,) = realReader.openMarkets();
-    for (uint256 i = 0; i < markets.length; i++) {
+    (Market[] memory _markets,) = realReader.openMarkets();
+    for (uint256 i = 0; i < _markets.length; i++) {
       OLKey memory olKey =
-        OLKey({outbound_tkn: markets[i].tkn0, inbound_tkn: markets[i].tkn1, tickSpacing: markets[i].tickSpacing});
+        OLKey({outbound_tkn: _markets[i].tkn0, inbound_tkn: _markets[i].tkn1, tickSpacing: _markets[i].tickSpacing});
       copySemibook(olKey);
       copySemibook(olKey.flipped());
-      reader.updateMarket(markets[i]);
+      reader.updateMarket(_markets[i]);
     }
   }
 
@@ -169,15 +169,9 @@ contract MangroveVaultTest is Test {
     });
   }
 
-  uint8[] public fixtureMarket = [0, 1, 2, 3];
-
-  function testFuzz_initialMintAmountMatch(uint8 market, uint128 quote) public {
-    vm.assume(quote > MangroveVaultConstants.MINIMUM_LIQUIDITY);
-    vm.assume(market < markets().length);
-    MarketWOracle memory _market = markets()[market];
-    vm.assume(quote < _market.maxQuote);
-
-    MangroveVault vault = new MangroveVault(
+  function deployVault(uint8 market) internal returns (MangroveVault vault, MarketWOracle memory _market) {
+    _market = markets()[market];
+    vault = new MangroveVault(
       kandelSeeder,
       address(_market.base),
       address(_market.quote),
@@ -187,82 +181,100 @@ contract MangroveVaultTest is Test {
       "MGVv",
       address(_market.oracle)
     );
+  }
 
-    (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) = vault.getMintAmounts(type(uint256).max, quote);
-    vm.assertTrue(quoteAmountOut == quote, "base or quote amount doesn't match");
+  function mintWithSpecifiedQuoteAmount(MangroveVault vault, MarketWOracle memory _market, uint256 quoteAmount)
+    internal
+    returns (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares)
+  {
+    // check that the quote amount is within the bounds
+    assertGt(quoteAmount, 0, "Quote amount must be greater than 0");
+    assertLt(quoteAmount, _market.maxQuote, "Quote amount must be less than max quote");
+
+    // get the mint amounts
+    (baseAmountOut, quoteAmountOut, shares) = vault.getMintAmounts(type(uint256).max, quoteAmount);
+
+    // check that the quote amount out matches the specified quote amount
+    assertEq(quoteAmountOut, quoteAmount, "Quote amount out doesn't match specified quote amount");
+
+    // deal the tokens
     deal(address(_market.base), address(this), baseAmountOut);
     deal(address(_market.quote), address(this), quoteAmountOut);
+
+    // balance snapshot
+    uint256 baseBefore = _market.base.balanceOf(address(this));
+    uint256 quoteBefore = _market.quote.balanceOf(address(this));
+    uint256 sharesBefore = vault.balanceOf(address(this));
+
     _market.base.approve(address(vault), baseAmountOut);
     _market.quote.approve(address(vault), quoteAmountOut);
+
     vault.mint(shares, baseAmountOut, quoteAmountOut);
-    assertEq(vault.balanceOf(address(this)), shares);
 
-    assertEq(_market.base.balanceOf(address(this)), 0);
-    assertEq(_market.quote.balanceOf(address(this)), 0);
+    // check that the balances are correct
+    assertEq(_market.base.balanceOf(address(this)), baseBefore - baseAmountOut);
+    assertEq(_market.quote.balanceOf(address(this)), quoteBefore - quoteAmountOut);
 
+    // check the shares balance is the correct one
+    assertEq(vault.balanceOf(address(this)), sharesBefore + shares, "Balance of shares doesn't match");
+  }
+
+  uint8[] public fixtureMarket = [0, 1, 2, 3];
+
+  function testFuzz_initialMintAmountMatch(uint8 market, uint128 quote) public {
+    vm.assume(quote > MangroveVaultConstants.MINIMUM_LIQUIDITY);
+    vm.assume(market < markets().length);
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    vm.assume(quote < _market.maxQuote);
+
+    // do the initial mint
+    (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
+      mintWithSpecifiedQuoteAmount(vault, _market, quote);
+
+    // check that the total supply is correct
+    // should be 2 * quoteAmount on initial mint scaled to 18 decimals
+    uint256 expectedTotalSupply = quoteAmountOut * 2 * 10 ** (18 - _market.quote.decimals());
+    assertApproxEqAbs(vault.totalSupply(), expectedTotalSupply, 1, "total supply doesn't match expected value");
+
+    // check that expected shares match
+    uint256 expectedShares = expectedTotalSupply - MangroveVaultConstants.MINIMUM_LIQUIDITY; // subtract the minimum liquidity (dead shares)
+    assertApproxEqAbs(shares, expectedShares, 1, "balance of shares doesn't match expected value");
+
+    // check that the balances are correct (state of funds is vault so funds are on the vault)
     assertEq(_market.base.balanceOf(address(vault)), baseAmountOut);
     assertEq(_market.quote.balanceOf(address(vault)), quoteAmountOut);
 
+    // check that the total supply is correct
     assertEq(vault.totalSupply(), shares + MangroveVaultConstants.MINIMUM_LIQUIDITY);
+    // check dead shares
     assertEq(vault.balanceOf(address(vault)), MangroveVaultConstants.MINIMUM_LIQUIDITY);
+
+    // check simple functions
   }
 
   function testFuzz_initialAndSecondMint(uint8 market, uint128 quoteInitial, uint128 quoteSecond) public {
     vm.assume(quoteInitial > MangroveVaultConstants.MINIMUM_LIQUIDITY);
     vm.assume(quoteSecond > MangroveVaultConstants.MINIMUM_LIQUIDITY);
     vm.assume(market < markets().length);
-    MarketWOracle memory _market = markets()[market];
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
     vm.assume(quoteInitial < _market.maxQuote);
     vm.assume(quoteSecond < _market.maxQuote);
 
-    MangroveVault vault = new MangroveVault(
-      kandelSeeder,
-      address(_market.base),
-      address(_market.quote),
-      1,
-      18 - _market.quote.decimals(),
-      "Mangrove Vault",
-      "MGVv",
-      address(_market.oracle)
-    );
-
+    // Mint the first time
     (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
-      vault.getMintAmounts(type(uint256).max, quoteInitial);
+      mintWithSpecifiedQuoteAmount(vault, _market, quoteInitial);
 
-    deal(address(_market.base), address(this), baseAmountOut);
-    deal(address(_market.quote), address(this), quoteAmountOut);
-
-    _market.base.approve(address(vault), baseAmountOut);
-    _market.quote.approve(address(vault), quoteAmountOut);
-
-    vault.mint(shares, baseAmountOut, quoteAmountOut);
-
+    // Assert the initial balances and shares
     assertEq(_market.base.balanceOf(address(vault)), baseAmountOut);
     assertEq(_market.quote.balanceOf(address(vault)), quoteAmountOut);
 
-    assertEq(vault.balanceOf(address(this)), shares);
-    assertEq(_market.base.balanceOf(address(this)), 0);
-    assertEq(_market.quote.balanceOf(address(this)), 0);
-
     // Mint a second time
     (uint256 baseAmountOut2, uint256 quoteAmountOut2, uint256 shares2) =
-      vault.getMintAmounts(type(uint256).max, quoteSecond);
-
-    deal(address(_market.base), address(this), baseAmountOut2);
-    deal(address(_market.quote), address(this), quoteAmountOut2);
-
-    _market.base.approve(address(vault), baseAmountOut2);
-    _market.quote.approve(address(vault), quoteAmountOut2);
-
-    vault.mint(shares2, baseAmountOut2, quoteAmountOut2);
+      mintWithSpecifiedQuoteAmount(vault, _market, quoteSecond);
 
     // Assert the new balances and shares
     assertEq(_market.base.balanceOf(address(vault)), baseAmountOut + baseAmountOut2);
     assertEq(_market.quote.balanceOf(address(vault)), quoteAmountOut + quoteAmountOut2);
-
-    assertEq(vault.balanceOf(address(this)), shares + shares2);
-    assertEq(_market.base.balanceOf(address(this)), 0);
-    assertEq(_market.quote.balanceOf(address(this)), 0);
 
     assertEq(vault.totalSupply(), shares + shares2 + MangroveVaultConstants.MINIMUM_LIQUIDITY);
   }
@@ -273,34 +285,12 @@ contract MangroveVaultTest is Test {
 
   function testFuzz_burnShares(uint8 market, uint128 quoteInitial, uint16 burnProportion) public {
     vm.assume(market < markets().length);
-
-    MarketWOracle memory _market = markets()[market];
-    vm.assume(quoteInitial >= MangroveVaultConstants.MINIMUM_LIQUIDITY && quoteInitial < _market.maxQuote);
     vm.assume(burnProportion > 0 && burnProportion <= BURN_PRECISION);
-
-    _market.oracle.tick().outboundFromInbound(quoteInitial);
-
-    MangroveVault vault = new MangroveVault(
-      kandelSeeder,
-      address(_market.base),
-      address(_market.quote),
-      1,
-      18 - _market.quote.decimals(),
-      "Mangrove Vault",
-      "MGVv",
-      address(_market.oracle)
-    );
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    vm.assume(quoteInitial >= BURN_PRECISION && quoteInitial < _market.maxQuote);
 
     (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
-      vault.getMintAmounts(type(uint256).max, quoteInitial);
-
-    deal(address(_market.base), address(this), baseAmountOut);
-    deal(address(_market.quote), address(this), quoteAmountOut);
-
-    _market.base.approve(address(vault), baseAmountOut);
-    _market.quote.approve(address(vault), quoteAmountOut);
-
-    vault.mint(shares, baseAmountOut, quoteAmountOut);
+      mintWithSpecifiedQuoteAmount(vault, _market, quoteInitial);
 
     uint256 sharesToBurn = (shares * burnProportion) / BURN_PRECISION;
     assertGt(sharesToBurn, 0, "Shares to burn should be greater than 0");
@@ -332,6 +322,5 @@ contract MangroveVaultTest is Test {
     WETH.approve(address(vault), baseAmountOut);
     USDC.approve(address(vault), quoteAmountOut);
     vault.mint(shares, baseAmountOut, quoteAmountOut);
-    console.log(vault.balanceOf(address(this)));
   }
 }

@@ -31,8 +31,6 @@ import {MangroveVaultConstants} from "./lib/MangroveVaultConstants.sol";
 import {MangroveVaultErrors} from "./lib/MangroveVaultErrors.sol";
 import {MangroveVaultEvents} from "./lib/MangroveVaultEvents.sol";
 
-import {console2 as console} from "forge-std/console2.sol";
-
 enum FundsState {
   Vault, // Funds are in the vault
   Passive, // Funds are in the kandel contract, but not actively listed on Mangrove
@@ -220,15 +218,15 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     view
     returns (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares)
   {
-    uint256 _totalSupply = totalSupply();
+    // Cap the max amounts to avoid overflow
+    baseAmountMax = Math.min(baseAmountMax, MAX_SAFE_VOLUME);
+    quoteAmountMax = Math.min(quoteAmountMax, MAX_SAFE_VOLUME);
 
-    console.log("totalSupply", _totalSupply);
+    uint256 _totalSupply = totalSupply();
 
     // Accrue fee shares
     (uint256 feeShares,) = _accruedFeeShares();
     _totalSupply += feeShares;
-
-    console.log("totalSupply after fee", _totalSupply);
 
     // If there is already a total supply of shares
     if (_totalSupply != 0) {
@@ -255,22 +253,14 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
       // Calculate the actual amounts of token0 and token1 to be deposited
       baseAmountOut = Math.mulDiv(shares, baseAmount, _totalSupply, Math.Rounding.Ceil);
       quoteAmountOut = Math.mulDiv(shares, quoteAmount, _totalSupply, Math.Rounding.Ceil);
-
-      console.log("baseAmountOut", baseAmountOut);
-      console.log("quoteAmountOut", quoteAmountOut);
     }
     // If there is no total supply, calculate initial shares
     else {
       Tick tick = _currentTick();
 
-      // Cap the amounts at MAX_SAFE_VOLUME to prevent overflow
-      quoteAmountMax = Math.min(quoteAmountMax, MAX_SAFE_VOLUME);
-
       baseAmountOut = tick.outboundFromInbound(quoteAmountMax);
       // Adjust the output amounts based on the maximum allowed amounts
       if (baseAmountOut > baseAmountMax) {
-        // Cap the base amount at MAX_SAFE_VOLUME to prevent overflow
-        baseAmountMax = Math.min(baseAmountMax, MAX_SAFE_VOLUME);
         baseAmountOut = baseAmountMax;
         quoteAmountOut = tick.inboundFromOutboundUp(baseAmountOut);
       } else {
