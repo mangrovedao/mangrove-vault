@@ -1,66 +1,63 @@
-## Foundry
+# MangroveVault
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+MangroveVault is a smart contract implementation of a vault built on top of the Mangrove Kandel strategy. This vault allows users to deposit tokens and participate in automated market-making activities on the Mangrove decentralized exchange, with additional features for position management and fee accrual.
 
-Foundry consists of:
+## Overview
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+The MangroveVault contract provides a way for users to pool their assets and benefit from the Kandel strategy, which is an automated market-making algorithm designed for Mangrove. The vault manager can set and adjust the Kandel position, which represents a range in price for market-making activities. 
 
-## Documentation
+Key features include:
 
-https://book.getfoundry.sh/
+1. **Token Deposits and Withdrawals**: Users can deposit and withdraw tokens to/from the vault.
+2. **Automated Market Making**: The vault interacts with a Kandel contract to perform market-making activities on Mangrove.
+3. **Position Management**: The vault manager can set and adjust the Kandel position, including rebalancing tokens.
+4. **Performance Fee**: The vault accrues performance fees, which are distributed to a fee recipient chosen by the vault manager.
+5. **Oracle Integration**: The vault uses an oracle for fee accrual and initial minting, which can compose different Chainlink price sources.
+
+For more information about the Kandel strategy, please refer to the [Mangrove Kandel documentation](https://docs.mangrove.exchange/general/kandel/).
+
+## Main Components
+
+The main contract in this repository is `MangroveVault.sol`. Here are some of its key functions:
+
+
+The main entrypoints of the MangroveVault contract are:
+
+1. `getMintAmounts(uint256 baseAmountMax, uint256 quoteAmountMax) public view returns (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares)`
+  Calculates the amount of shares to be minted and the actual amounts of base and quote tokens to be deposited based on the maximum amounts provided.
+
+2. `mint(uint256 baseAmount, uint256 quoteAmount, uint256 minShares) public returns (uint256 shares)`
+  Allows users to deposit base and quote tokens into the vault and receive shares in return.
+
+3. `burn(uint256 shares, uint256 minAmountBaseOut, uint256 minAmountQuoteOut) public returns (uint256 amountBaseOut, uint256 amountQuoteOut)`
+  Enables users to burn their shares and withdraw the corresponding amounts of base and quote tokens from the vault.
+
+4. `swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell) public`
+  Allows the vault owner to perform token swaps, potentially using external DEXs or AMMs.
+
+5. `setPosition(KandelPosition memory position) public`
+  Permits the vault owner to set or update the Kandel position, which defines the market-making strategy parameters.
+
+
+## Oracle Integration
+
+The repository includes a contract to convert Chainlink oracles into a format compatible with Mangrove. This oracle can compose different Chainlink price sources to provide accurate price information for the vault's operations.
 
 ## Usage
 
-### Build
+To use the MangroveVault:
 
-```shell
-$ forge build
-```
+1. Deploy or find an existing MangroveChainlinkOracle using the MangroveChainlinkOracleFactory contract.
+2. Deploy the MangroveVault contract with appropriate parameters (seeder, token addresses, tick spacing, oracle address, etc.).
+3. Set the initial Kandel position using the `setPosition` function.
+4. Users can mint shares by calling the `mint` function and providing tokens.
+5. The vault automatically manages the funds using the Kandel strategy.
+6. The vault manager can adjust the position and rebalance tokens as needed.
+7. Users can burn their shares to withdraw their proportion of the vault's assets.
 
-### Test
+## Important Notes
 
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+- The contract includes various safety checks and access controls to ensure secure operation.
+- The vault's performance is dependent on the effectiveness of the Kandel strategy, market conditions, and the manager's position adjustments.
+- Performance fees are accrued based on the vault's performance and distributed to the designated fee recipient.
+- Users should be aware of potential risks associated with automated market-making strategies and the manager's control over the position.
