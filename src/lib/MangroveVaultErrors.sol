@@ -18,4 +18,8 @@ library MangroveVaultErrors {
   error ChainlinkInvalidPrice();
 
   error SampleAmountTooHigh();
+
+  error InvalidManagerBalance();
+
+  error CannotWithdrawToken(address unauthorizedToken);
 }

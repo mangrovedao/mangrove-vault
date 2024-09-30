@@ -14,10 +14,10 @@ contract OracleTest is Test {
     vm.selectFork(arbitrumFork);
     vm.rollFork(238_624_545);
     oracle = new MangroveChainlinkOracle(
-      AggregatorV3Interface(0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612),
-      AggregatorV3Interface(address(0)),
-      AggregatorV3Interface(0x6ce185860a4963106506C203335A2910413708e9),
-      AggregatorV3Interface(address(0)),
+      0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612,
+      address(0),
+      0x6ce185860a4963106506C203335A2910413708e9,
+      address(0),
       18,
       18,
       0,

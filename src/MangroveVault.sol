@@ -1,40 +1,63 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {GeometricKandel} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/GeometricKandel.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {
-  AbstractKandelSeeder,
-  OLKey
-} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/AbstractKandelSeeder.sol";
+// Mangrove
+import {IMangrove, Local, OLKey} from "@mgv/src/IMangrove.sol";
 import {Tick} from "@mgv/lib/core/TickLib.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {MAX_SAFE_VOLUME} from "@mgv/lib/core/Constants.sol";
+
+// Mangrove Strategies
+import {AbstractKandelSeeder} from
+  "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/AbstractKandelSeeder.sol";
+import {GeometricKandel} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/GeometricKandel.sol";
+
+// OpenZeppelin
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
-import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {OfferType} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/TradesBaseQuotePair.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
+// Local dependencies
+import {GeometricKandelExtra, Params} from "./lib/GeometricKandelExtra.sol";
+import {IOracle} from "./oracles/IOracle.sol";
+import {MangroveLib} from "./lib/MangroveLib.sol";
+import {MangroveVaultConstants} from "./lib/MangroveVaultConstants.sol";
 import {MangroveVaultErrors} from "./lib/MangroveVaultErrors.sol";
 import {MangroveVaultEvents} from "./lib/MangroveVaultEvents.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {Address} from "@openzeppelin/contracts/utils/Address.sol";
-import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {IMangrove, Local} from "@mgv/src/IMangrove.sol";
+
+import {console2 as console} from "forge-std/console2.sol";
 
 enum FundsState {
-  Unset, // Funds state is not set
   Vault, // Funds are in the vault
   Passive, // Funds are in the kandel contract, but not actively listed on Mangrove
   Active // Funds are actively listed on Mangrove
 
 }
 
-using SafeERC20 for IERC20;
-using Address for address;
-using SafeCast for uint256;
+// TODO: cap vault balance
 
-contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
+struct KandelPosition {
+  Tick tickIndex0;
+  uint256 tickOffset;
+  Params params;
+  FundsState fundsState;
+}
+
+contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard {
+  using SafeERC20 for IERC20;
+  using Address for address;
+  using SafeCast for uint256;
+  using Math for uint256;
+  using GeometricKandelExtra for GeometricKandel;
+  using MangroveLib for IMangrove;
   /// @notice The GeometricKandel contract instance used for market making.
+
   GeometricKandel public kandel;
 
   /// @notice The AbstractKandelSeeder contract instance used to initialize the Kandel contract.
@@ -44,13 +67,19 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
   IMangrove public immutable MGV;
 
   /// @notice The address of the first token in the token pair.
-  address public immutable token0;
+  address public immutable BASE;
 
   /// @notice The address of the second token in the token pair.
-  address public immutable token1;
+  address public immutable QUOTE;
 
   /// @notice The tick spacing for the Mangrove market.
-  uint256 public immutable tickSpacing;
+  uint256 public immutable TICK_SPACING;
+
+  /// @notice The factor to scale the quote token amount by at initial mint.
+  uint256 public immutable QUOTE_SCALE;
+
+  /// @notice The number of decimals of the LP token.
+  uint8 public immutable DECIMALS;
 
   /// @notice The current state of the funds in the vault.
   FundsState public fundsState;
@@ -62,44 +91,63 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
   /// @dev This is the tick index for the first offer in the Kandel contract (defined as a bid on the token0/token1 offer list).
   Tick public tickIndex0;
 
+  /// @notice The oracle used to get the price of the token pair.
+  IOracle public immutable oracle;
+
+  uint256 public lastTotalInQuote;
+  uint256 public maxTotalInQuote;
+  uint256 public fee; // 18 decimals
+
+  address public feeRecipient;
+
   /**
    * @notice Constructor for the MangroveVault contract.
-   * @dev token0 and token1 will be ordered according to address (smaller first).
    * @param _seeder The AbstractKandelSeeder contract instance used to initialize the Kandel contract.
-   * @param _token0 The address of the first token in the token pair.
-   * @param _token1 The address of the second token in the token pair.
+   * @param _BASE The address of the first token in the token pair.
+   * @param _QUOTE The address of the second token in the token pair.
    * @param _tickSpacing The spacing between ticks on the Mangrove market.
+   * @param _decimalsOffset The number of decimals to add to the quote token decimals.
+   * @param _oracle The address of the oracle used to get the price of the token pair.
    * @param name The name of the ERC20 token, chosen to represent the Mangrove market and eventually the vault manager.
    * @param symbol The symbol of the ERC20 token, chosen to represent the Mangrove market and eventually the vault manager.
    */
   constructor(
     AbstractKandelSeeder _seeder,
-    address _token0,
-    address _token1,
+    address _BASE,
+    address _QUOTE,
     uint256 _tickSpacing,
+    uint256 _decimalsOffset,
     string memory name,
-    string memory symbol
+    string memory symbol,
+    address _oracle
   ) Ownable(msg.sender) ERC20(name, symbol) ERC20Permit(name) {
     seeder = _seeder;
-    tickSpacing = _tickSpacing;
+    TICK_SPACING = _tickSpacing;
     MGV = _seeder.MGV();
-    (token0, token1) = _token0 < _token1 ? (_token0, _token1) : (_token1, _token0);
-    kandel = _seeder.sow(OLKey(token0, token1, _tickSpacing), false);
-  }
-
-  function _currentTick() internal view returns (Tick) {
-    return Tick.wrap(0);
+    (BASE, QUOTE) = _BASE < _QUOTE ? (_BASE, _QUOTE) : (_QUOTE, _BASE);
+    kandel = _seeder.sow(OLKey(BASE, QUOTE, _tickSpacing), false);
+    oracle = IOracle(_oracle);
+    DECIMALS = (ERC20(QUOTE).decimals() + _decimalsOffset).toUint8();
+    QUOTE_SCALE = 10 ** _decimalsOffset;
   }
 
   /**
-   * @notice Retrieves the parameters of the Kandel contract.
-   * @return gasprice The gas price for the Kandel contract (if 0 or lower than Mangrove gas price, will be set to Mangrove gas price).
-   * @return gasreq The gas request for the Kandel contract (Gas used to consume one offer of the Kandel contract).
-   * @return stepSize The step size for the Kandel contract (It is the distance between an executed bid/ask and its dual offer).
-   * @return pricePoints The number of price points (offers) published by kandel (-1) (=> 3 price points will result in 2 live offers).
+   * @inheritdoc ERC20
    */
-  function kandelParams() public view returns (uint32 gasprice, uint24 gasreq, uint32 stepSize, uint32 pricePoints) {
-    (gasprice, gasreq, stepSize, pricePoints) = kandel.params();
+  function decimals() public view override returns (uint8) {
+    return DECIMALS;
+  }
+
+  /**
+   * @notice Retrieves the parameters of the Kandel position.
+   * @return params The parameters of the Kandel position.
+   * * gasprice The gas price for the Kandel position (if 0 or lower than Mangrove gas price, will be set to Mangrove gas price).
+   * * gasreq The gas request for the Kandel position (Gas used to consume one offer of the Kandel position).
+   * * stepSize The step size for the Kandel position (It is the distance between an executed bid/ask and its dual offer).
+   * * pricePoints The number of price points (offers) published by kandel (-1) (=> 3 price points will result in 2 live offers).
+   */
+  function kandelParams() public view returns (Params memory params) {
+    return kandel._params();
   }
 
   /**
@@ -112,77 +160,91 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
     return kandel.baseQuoteTickOffset();
   }
 
-  function markets() public view returns (OLKey memory olKey01, OLKey memory olKey10) {
-    return (OLKey(token0, token1, tickSpacing), OLKey(token1, token0, tickSpacing));
-  }
-
   /**
    * @notice Retrieves the inferred balances of the Kandel contract for both tokens.
    * @dev The returned amounts are translations based on the origin of the funds, as underlyings could be deposited in another protocol.
-   * @return amount0 The inferred balance of token0 in the Kandel contract.
-   * @return amount1 The inferred balance of token1 in the Kandel contract.
+   * @return baseAmount The inferred balance of base in the Kandel contract.
+   * @return quoteAmount The inferred balance of quote in the Kandel contract.
    */
-  function getKandelBalances() public view returns (uint256 amount0, uint256 amount1) {
-    amount0 = kandel.reserveBalance(OfferType.Ask);
-    amount1 = kandel.reserveBalance(OfferType.Bid);
+  function getKandelBalances() public view returns (uint256 baseAmount, uint256 quoteAmount) {
+    (baseAmount, quoteAmount) = kandel.getBalances();
   }
 
   /**
-   * @notice Retrieves the balances of the vault for both tokens.
-   * @return amount0 The balance of token0 in the vault.
-   * @return amount1 The balance of token1 in the vault.
+   * @notice Retrieves the balances of the vault for both tokens minus the manager's balance.
+   * @return baseAmount The balance of base in the vault.
+   * @return quoteAmount The balance of quote in the vault.
    */
-  function getVaultBalances() public view returns (uint256 amount0, uint256 amount1) {
-    amount0 = IERC20(token0).balanceOf(address(this));
-    amount1 = IERC20(token1).balanceOf(address(this));
+  function getVaultBalances() public view returns (uint256 baseAmount, uint256 quoteAmount) {
+    baseAmount = IERC20(BASE).balanceOf(address(this));
+    quoteAmount = IERC20(QUOTE).balanceOf(address(this));
   }
 
   /**
    * @notice Retrieves the total underlying balances of both tokens.
    * @dev Includes balances from both the vault and Kandel contract.
    * @dev The Kandel balances are inferred based on the origin of the funds, as underlyings could be deposited in another protocol.
-   * @return amount0 The total balance of token0.
-   * @return amount1 The total balance of token1.
+   * @return baseAmount The total balance of base.
+   * @return quoteAmount The total balance of quote.
    */
-  function getUnderlyingBalances() public view returns (uint256 amount0, uint256 amount1) {
-    (amount0, amount1) = getVaultBalances();
+  function getUnderlyingBalances() public view returns (uint256 baseAmount, uint256 quoteAmount) {
+    (baseAmount, quoteAmount) = getVaultBalances();
     (uint256 kandelBaseBalance, uint256 kandelQuoteBalance) = getKandelBalances();
-    amount0 += kandelBaseBalance;
-    amount1 += kandelQuoteBalance;
+    baseAmount += kandelBaseBalance;
+    quoteAmount += kandelQuoteBalance;
+  }
+
+  /**
+   * @notice Calculates the total value of the vault's assets in quote token.
+   * @dev This function uses the oracle to convert the base token amount to quote token.
+   * @return The total value of the vault's assets in quote token.
+   */
+  function getTotalInQuote() public view returns (uint256) {
+    (uint256 baseAmount, uint256 quoteAmount) = getUnderlyingBalances();
+    return _toQuoteAmount(baseAmount, quoteAmount);
   }
 
   /**
    * @notice Computes the shares that can be minted according to the maximum amounts of token0 and token1 provided.
-   * @param amount0Max The maximum amount of token0 that can be used for minting.
-   * @param amount1Max The maximum amount of token1 that can be used for minting.
-   * @return amount0Out The actual amount of token0 that will be deposited.
-   * @return amount1Out The actual amount of token1 that will be deposited.
+   * @param baseAmountMax The maximum amount of base that can be used for minting.
+   * @param quoteAmountMax The maximum amount of quote that can be used for minting.
+   * @return baseAmountOut The actual amount of base that will be deposited.
+   * @return quoteAmountOut The actual amount of quote that will be deposited.
    * @return shares The amount of shares that will be minted.
    *
    * @dev Reverts with `NoUnderlyingBalance` if both token0 and token1 balances are zero.
    * @dev Reverts with `ZeroMintAmount` if the calculated shares to be minted is zero.
    */
-  function getMintAmounts(uint256 amount0Max, uint256 amount1Max)
+  function getMintAmounts(uint256 baseAmountMax, uint256 quoteAmountMax)
     public
     view
-    returns (uint256 amount0Out, uint256 amount1Out, uint256 shares)
+    returns (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares)
   {
     uint256 _totalSupply = totalSupply();
 
+    console.log("totalSupply", _totalSupply);
+
+    // Accrue fee shares
+    (uint256 feeShares,) = _accruedFeeShares();
+    _totalSupply += feeShares;
+
+    console.log("totalSupply after fee", _totalSupply);
+
     // If there is already a total supply of shares
     if (_totalSupply != 0) {
-      (uint256 amount0, uint256 amount1) = getUnderlyingBalances();
+      (uint256 baseAmount, uint256 quoteAmount) = getUnderlyingBalances();
 
       // Calculate shares based on the available balances
-      if (amount0 == 0 && amount1 != 0) {
-        shares = Math.mulDiv(amount1Max, _totalSupply, amount1);
-      } else if (amount0 != 0 && amount1 == 0) {
-        shares = Math.mulDiv(amount0Max, _totalSupply, amount0);
-      } else if (amount0 == 0 && amount1 == 0) {
+      if (baseAmount == 0 && quoteAmount != 0) {
+        shares = Math.mulDiv(quoteAmountMax, _totalSupply, quoteAmount);
+      } else if (baseAmount != 0 && quoteAmount == 0) {
+        shares = Math.mulDiv(baseAmountMax, _totalSupply, baseAmount);
+      } else if (baseAmount == 0 && quoteAmount == 0) {
         revert MangroveVaultErrors.NoUnderlyingBalance();
       } else {
-        shares =
-          Math.min(Math.mulDiv(amount0Max, _totalSupply, amount0), Math.mulDiv(amount1Max, _totalSupply, amount1));
+        shares = Math.min(
+          Math.mulDiv(baseAmountMax, _totalSupply, baseAmount), Math.mulDiv(quoteAmountMax, _totalSupply, quoteAmount)
+        );
       }
 
       // Revert if no shares can be minted
@@ -191,180 +253,264 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
       }
 
       // Calculate the actual amounts of token0 and token1 to be deposited
-      amount0Out = Math.mulDiv(shares, amount0, _totalSupply, Math.Rounding.Ceil);
-      amount1Out = Math.mulDiv(shares, amount1, _totalSupply, Math.Rounding.Ceil);
-    }
-    // If the funds state is not unset and there is no total supply
-    else if (fundsState != FundsState.Unset) {
-      Tick tick = _currentTick();
-      amount0Out = tick.outboundFromInbound(amount1Max);
+      baseAmountOut = Math.mulDiv(shares, baseAmount, _totalSupply, Math.Rounding.Ceil);
+      quoteAmountOut = Math.mulDiv(shares, quoteAmount, _totalSupply, Math.Rounding.Ceil);
 
+      console.log("baseAmountOut", baseAmountOut);
+      console.log("quoteAmountOut", quoteAmountOut);
+    }
+    // If there is no total supply, calculate initial shares
+    else {
+      Tick tick = _currentTick();
+
+      // Cap the amounts at MAX_SAFE_VOLUME to prevent overflow
+      quoteAmountMax = Math.min(quoteAmountMax, MAX_SAFE_VOLUME);
+
+      baseAmountOut = tick.outboundFromInbound(quoteAmountMax);
       // Adjust the output amounts based on the maximum allowed amounts
-      if (amount0Out > amount0Max) {
-        amount0Out = amount0Max;
-        amount1Out = tick.inboundFromOutboundUp(amount0Max);
+      if (baseAmountOut > baseAmountMax) {
+        // Cap the base amount at MAX_SAFE_VOLUME to prevent overflow
+        baseAmountMax = Math.min(baseAmountMax, MAX_SAFE_VOLUME);
+        baseAmountOut = baseAmountMax;
+        quoteAmountOut = tick.inboundFromOutboundUp(baseAmountOut);
       } else {
-        amount1Out = amount1Max;
+        quoteAmountOut = quoteAmountMax;
       }
 
-      // Calculate the shares to be minted
-      shares = Math.sqrt(amount0Out * amount1Out);
+      // Calculate the shares to be minted taking dead shares into account
+      (, shares) = ((tick.inboundFromOutboundUp(baseAmountOut) + quoteAmountOut) * QUOTE_SCALE).trySub(
+        MangroveVaultConstants.MINIMUM_LIQUIDITY
+      );
     }
   }
 
   /**
    * @notice Calculates the underlying token balances corresponding to a given share amount.
    * @param share The amount of shares to calculate the underlying balances for.
-   * @return amount0 The amount of token0 corresponding to the given share.
-   * @return amount1 The amount of token1 corresponding to the given share.
+   * @return baseAmount The amount of base corresponding to the given share.
+   * @return quoteAmount The amount of quote corresponding to the given share.
    * @dev This function returns the underlying token balances based on the current total supply of shares.
    *      If the total supply is zero, it returns (0, 0).
    */
-  function getUnderlyingBalancesByShare(uint256 share) public view returns (uint256 amount0, uint256 amount1) {
-    (uint256 token0Balance, uint256 token1Balance) = getUnderlyingBalances();
-    uint256 totalSupply = totalSupply();
-    if (totalSupply == 0) {
+  function getUnderlyingBalancesByShare(uint256 share) public view returns (uint256 baseAmount, uint256 quoteAmount) {
+    (uint256 baseBalance, uint256 quoteBalance) = getUnderlyingBalances();
+    uint256 _totalSupply = totalSupply();
+    // Accrue fee shares
+    (uint256 feeShares,) = _accruedFeeShares();
+    _totalSupply += feeShares;
+    if (_totalSupply == 0) {
       return (0, 0);
     }
-    amount0 = Math.mulDiv(share, token0Balance, totalSupply);
-    amount1 = Math.mulDiv(share, token1Balance, totalSupply);
+    baseAmount = Math.mulDiv(share, baseBalance, _totalSupply, Math.Rounding.Floor);
+    quoteAmount = Math.mulDiv(share, quoteBalance, _totalSupply, Math.Rounding.Floor);
   }
 
   // interact functions
 
   struct MintHeap {
     uint256 totalSupply;
-    uint256 amount0Balance;
-    uint256 amount1Balance;
-    uint256 amount0;
-    uint256 amount1;
+    uint256 baseBalance;
+    uint256 quoteBalance;
+    uint256 baseAmount;
+    uint256 quoteAmount;
     FundsState fundsState;
     Tick tick;
     uint256 computedShares;
-    IERC20 token0;
-    IERC20 token1;
+    IERC20 base;
+    IERC20 quote;
   }
 
-  function mint(uint256 mintAmount, uint256 amount0Max, uint256 amount1Max)
+  /**
+   * @notice Mints new shares by depositing tokens into the vault
+   * @param mintAmount The amount of shares to mint
+   * @param baseAmountMax The maximum amount of base to deposit
+   * @param quoteAmountMax The maximum amount of quote to deposit
+   * @return shares The number of shares minted
+   * @return baseAmount The actual amount of base deposited
+   * @return quoteAmount The actual amount of quote deposited
+   * @dev This function calculates the required token amounts based on the current state of the vault:
+   *      - If the vault has existing shares, it calculates proportional amounts based on current balances
+   *      - For the initial mint, it uses the current oracle price to determine token amounts
+   *      - Tokens are transferred from the user, deposited into Kandel if necessary, and new shares are minted
+   *      - The function updates the vault's position after minting
+   * @dev Reverts if:
+   *      - The vault is paused
+   *      - The initial mint amount doesn't match the computed shares
+   *      - Minting is impossible due to unset funds state
+   *      - The required token amounts exceed the specified maximums (slippage protection)
+   *      - unable to transfer tokens from user
+   */
+  function mint(uint256 mintAmount, uint256 baseAmountMax, uint256 quoteAmountMax)
     public
     whenNotPaused
-    returns (uint256 shares, uint256 amount0, uint256 amount1)
+    nonReentrant
+    returns (uint256 shares, uint256 baseAmount, uint256 quoteAmount)
   {
+    if (mintAmount == 0) revert MangroveVaultErrors.ZeroMintAmount();
+
+    _updateLastTotalInQuote(_accrueFee());
+
+    // Initialize a MintHeap struct to store temporary variables
     MintHeap memory heap;
+    // Get the current total supply of shares
     heap.totalSupply = totalSupply();
+    // Get the current funds state
     heap.fundsState = fundsState;
+
+    // If there are existing shares
     if (heap.totalSupply != 0) {
-      (heap.amount0Balance, heap.amount1Balance) = getUnderlyingBalances();
-      heap.amount0 = Math.mulDiv(mintAmount, heap.amount0Balance, heap.totalSupply, Math.Rounding.Ceil);
-      heap.amount1 = Math.mulDiv(mintAmount, heap.amount1Balance, heap.totalSupply, Math.Rounding.Ceil);
-    } else if (heap.fundsState != FundsState.Unset) {
+      // Get the current underlying balances
+      (heap.baseBalance, heap.quoteBalance) = getUnderlyingBalances();
+      // Calculate proportional amounts of tokens needed based on existing balances
+      heap.baseAmount = Math.mulDiv(mintAmount, heap.baseBalance, heap.totalSupply, Math.Rounding.Ceil);
+      heap.quoteAmount = Math.mulDiv(mintAmount, heap.quoteBalance, heap.totalSupply, Math.Rounding.Ceil);
+    }
+    // If it's the initial mint and funds state is not Unset
+    else {
+      // Get the current oracle price
       heap.tick = _currentTick();
-      heap.amount0 = heap.tick.outboundFromInbound(amount1Max);
-      if (heap.amount0 > amount0Max) {
-        heap.amount0 = amount0Max;
-        heap.amount1 = heap.tick.inboundFromOutboundUp(amount0Max);
+      // Calculate token0 amount based on max token1 amount and current price
+      heap.baseAmount = heap.tick.outboundFromInbound(quoteAmountMax);
+      // If calculated token0 amount exceeds max, adjust amounts
+      if (heap.baseAmount > baseAmountMax) {
+        heap.baseAmount = baseAmountMax;
+        heap.quoteAmount = heap.tick.inboundFromOutboundUp(baseAmountMax);
       } else {
-        heap.amount1 = amount1Max;
+        heap.quoteAmount = quoteAmountMax;
       }
-      heap.computedShares = Math.sqrt(heap.amount0 * heap.amount1);
+      // Calculate shares based on geometric mean of token amounts
+      (, heap.computedShares) = ((heap.tick.inboundFromOutboundUp(heap.baseAmount) + heap.quoteAmount) * QUOTE_SCALE)
+        .trySub(MangroveVaultConstants.MINIMUM_LIQUIDITY);
+      // Ensure computed shares match the requested mint amount
       if (heap.computedShares != mintAmount) {
         revert MangroveVaultErrors.InitialMintAmountMismatch(heap.computedShares);
       }
-    } else {
-      revert MangroveVaultErrors.ImpossibleMint();
+      _mint(address(this), MangroveVaultConstants.MINIMUM_LIQUIDITY); // dead shares
     }
 
-    if (heap.amount0 > amount0Max || heap.amount1 > amount1Max) {
+    // Check if required amounts exceed specified maximums (slippage protection)
+    if (heap.baseAmount > baseAmountMax || heap.quoteAmount > quoteAmountMax) {
       revert MangroveVaultErrors.IncorrectSlippage();
     }
 
-    heap.token0 = IERC20(token0);
-    heap.token1 = IERC20(token1);
+    // Get token interfaces
+    heap.base = IERC20(BASE);
+    heap.quote = IERC20(QUOTE);
 
-    heap.token0.safeTransferFrom(msg.sender, address(this), heap.amount0);
-    heap.token1.safeTransferFrom(msg.sender, address(this), heap.amount1);
+    // Transfer tokens from user to this contract
+    heap.base.safeTransferFrom(msg.sender, address(this), heap.baseAmount);
+    heap.quote.safeTransferFrom(msg.sender, address(this), heap.quoteAmount);
 
-    if (heap.fundsState == FundsState.Passive || heap.fundsState == FundsState.Active) {
-      heap.token0.forceApprove(address(kandel), heap.amount0);
-      heap.token1.forceApprove(address(kandel), heap.amount1);
-
-      kandel.depositFunds(heap.amount0, heap.amount1);
-    }
-
+    // Mint new shares to the user
     _mint(msg.sender, mintAmount);
 
+    // Update the vault's position
     _updatePosition();
 
-    return (mintAmount, heap.amount0, heap.amount1);
+    _updateLastTotalInQuote(getTotalInQuote());
+
+    // Return minted shares and deposited token amounts
+    return (mintAmount, heap.baseAmount, heap.quoteAmount);
   }
 
   struct BurnHeap {
     uint256 totalSupply;
-    uint256 vaultBalance0;
-    uint256 vaultBalance1;
-    uint256 kandelBalance0;
-    uint256 kandelBalance1;
-    uint256 underlyingBalance0;
-    uint256 underlyingBalance1;
+    uint256 vaultBalanceBase;
+    uint256 vaultBalanceQuote;
+    uint256 kandelBalanceBase;
+    uint256 kandelBalanceQuote;
+    uint256 underlyingBalanceBase;
+    uint256 underlyingBalanceQuote;
   }
 
   /**
    * @notice Burns shares and withdraws underlying assets
+   * @dev This function calculates the proportion of assets to withdraw based on the number of shares being burned,
+   *      withdraws funds from Kandel if necessary, and transfers the assets to the user.
    * @param shares The number of shares to burn
-   * @param minAmount0Out The minimum amount of token0 to receive
-   * @param minAmount1Out The minimum amount of token1 to receive
-   * @return amount0Out The actual amount of token0 withdrawn
-   * @return amount1Out The actual amount of token1 withdrawn
+   * @param minAmountBaseOut The minimum amount of base to receive (slippage protection)
+   * @param minAmountQuoteOut The minimum amount of quote to receive (slippage protection)
+   * @return amountBaseOut The actual amount of base withdrawn
+   * @return amountQuoteOut The actual amount of quote withdrawn
+   * @dev MangroveVaultErrors.ZeroShares If the number of shares to burn is zero
+   * @dev MangroveVaultErrors.IncorrectSlippage If the withdrawal amounts are less than the specified minimums
    */
-  function burn(uint256 shares, uint256 minAmount0Out, uint256 minAmount1Out)
+  function burn(uint256 shares, uint256 minAmountBaseOut, uint256 minAmountQuoteOut)
     public
     whenNotPaused
-    returns (uint256 amount0Out, uint256 amount1Out)
+    nonReentrant
+    returns (uint256 amountBaseOut, uint256 amountQuoteOut)
   {
     if (shares == 0) revert MangroveVaultErrors.ZeroShares();
+
+    _updateLastTotalInQuote(_accrueFee());
 
     BurnHeap memory heap;
 
     // Calculate the proportion of total assets to withdraw
     heap.totalSupply = totalSupply();
 
+    // Burn the shares
     _burn(msg.sender, shares);
 
-    (heap.vaultBalance0, heap.vaultBalance1) = getVaultBalances();
-    (heap.kandelBalance0, heap.kandelBalance1) = getKandelBalances();
+    // Get current balances
+    (heap.vaultBalanceBase, heap.vaultBalanceQuote) = getVaultBalances();
+    (heap.kandelBalanceBase, heap.kandelBalanceQuote) = getKandelBalances();
 
-    heap.underlyingBalance0 = Math.mulDiv(shares, heap.vaultBalance0 + heap.kandelBalance0, heap.totalSupply);
-    heap.underlyingBalance1 = Math.mulDiv(shares, heap.vaultBalance1 + heap.kandelBalance1, heap.totalSupply);
+    // Calculate the user's share of the underlying assets
+    heap.underlyingBalanceBase = Math.mulDiv(shares, heap.vaultBalanceBase + heap.kandelBalanceBase, heap.totalSupply);
+    heap.underlyingBalanceQuote =
+      Math.mulDiv(shares, heap.vaultBalanceQuote + heap.kandelBalanceQuote, heap.totalSupply);
 
-    // check slippage
-    if (heap.underlyingBalance0 < minAmount0Out || heap.underlyingBalance1 < minAmount1Out) {
+    // Check if the withdrawal amounts meet the minimum requirements (slippage protection)
+    if (heap.underlyingBalanceBase < minAmountBaseOut || heap.underlyingBalanceQuote < minAmountQuoteOut) {
       revert MangroveVaultErrors.IncorrectSlippage();
     }
 
-    // Withdraw from Kandel if necessary
-    if (heap.underlyingBalance0 > heap.vaultBalance0 || heap.underlyingBalance1 > heap.vaultBalance1) {
-      uint256 withdrawAmount0 =
-        heap.underlyingBalance0 > heap.vaultBalance0 ? heap.underlyingBalance0 - heap.vaultBalance0 : 0;
-      uint256 withdrawAmount1 =
-        heap.underlyingBalance1 > heap.vaultBalance1 ? heap.underlyingBalance1 - heap.vaultBalance1 : 0;
-      kandel.withdrawFunds(withdrawAmount0, withdrawAmount1, address(this));
+    // Withdraw from Kandel if the vault doesn't have enough balance
+    if (heap.underlyingBalanceBase > heap.vaultBalanceBase || heap.underlyingBalanceQuote > heap.vaultBalanceQuote) {
+      (, uint256 withdrawAmountBase) = heap.underlyingBalanceBase.trySub(heap.vaultBalanceBase);
+      (, uint256 withdrawAmountQuote) = heap.underlyingBalanceQuote.trySub(heap.vaultBalanceQuote);
+      kandel.withdrawFunds(withdrawAmountBase, withdrawAmountQuote, address(this));
     }
 
-    IERC20(token0).safeTransfer(msg.sender, heap.underlyingBalance0);
-    IERC20(token1).safeTransfer(msg.sender, heap.underlyingBalance1);
+    // Transfer the assets to the user
+    IERC20(BASE).safeTransfer(msg.sender, heap.underlyingBalanceBase);
+    IERC20(QUOTE).safeTransfer(msg.sender, heap.underlyingBalanceQuote);
 
+    // Update the vault's position
     _updatePosition();
 
-    emit MangroveVaultEvents.Burn(msg.sender, shares, amount0Out, amount1Out);
+    _updateLastTotalInQuote(getTotalInQuote());
+
+    // Set the return values
+    amountBaseOut = heap.underlyingBalanceBase;
+    amountQuoteOut = heap.underlyingBalanceQuote;
+
+    emit MangroveVaultEvents.Burn(msg.sender, shares, amountBaseOut, amountQuoteOut);
+  }
+
+  function updatePosition() public {
+    _updatePosition();
   }
 
   // admin functions
 
+  /**
+   * @notice Allows a specific contract to perform swaps on behalf of the vault
+   * @dev Can only be called by the owner of the contract
+   * @param contractAddress The address of the contract to be allowed
+   */
   function allowSwapContract(address contractAddress) public onlyOwner {
     allowedSwapContracts[contractAddress] = true;
     emit MangroveVaultEvents.SwapContractAllowed(contractAddress, true);
   }
 
+  /**
+   * @notice Disallows a previously allowed contract from performing swaps on behalf of the vault
+   * @dev Can only be called by the owner of the contract
+   * @param contractAddress The address of the contract to be disallowed
+   */
   function disallowSwapContract(address contractAddress) public onlyOwner {
     allowedSwapContracts[contractAddress] = false;
     emit MangroveVaultEvents.SwapContractAllowed(contractAddress, false);
@@ -381,77 +527,90 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
     int256 netAmountOut;
   }
 
-  function swap(
-    address target,
-    bytes calldata data,
-    uint256 amountOut,
-    uint256 amountInMin,
-    bool sellToken0,
-    bool depositAll
-  ) public onlyOwner {
-    SwapHeap memory heap;
+  /**
+   * @notice Executes a swap operation on behalf of the vault
+   * @dev This function can only be called by the owner of the contract
+   * @param target The address of the contract to execute the swap on
+   * @param data The calldata to be sent to the target contract
+   * @param amountOut The amount of tokens to be swapped out
+   * @param amountInMin The minimum amount of tokens to be received
+   * @param sell If true, sell BASE; otherwise, sell QUOTE
+   */
+  function swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell)
+    public
+    onlyOwner
+    nonReentrant
+  {
+    // Get current balances of BASE and QUOTE tokens in the vault
+    (uint256 baseBalance, uint256 quoteBalance) = getVaultBalances();
 
-    {
-      (heap.tokenOut, heap.tokenIn) = sellToken0 ? (IERC20(token0), IERC20(token1)) : (IERC20(token1), IERC20(token0));
-      heap.amountOutBalance = heap.tokenOut.balanceOf(address(this));
-      heap.amountToWithdraw = heap.amountOutBalance >= amountOut ? 0 : amountOut - heap.amountOutBalance;
-    }
-
-    if (heap.amountToWithdraw > 0) {
-      if (sellToken0) {
-        kandel.withdrawFunds(heap.amountToWithdraw, 0, address(this));
-      } else {
-        kandel.withdrawFunds(0, heap.amountToWithdraw, address(this));
+    if (sell) {
+      // If selling BASE, check if we need to withdraw from Kandel
+      (, uint256 missingBase) = amountOut.trySub(baseBalance);
+      if (missingBase > 0) {
+        // Withdraw missing BASE from Kandel
+        kandel.withdrawFunds(missingBase, 0, address(this));
+        baseBalance += missingBase;
       }
+      // Approve the swap target to spend BASE
+      IERC20(BASE).forceApprove(target, amountOut);
+    } else {
+      // If selling QUOTE, check if we need to withdraw from Kandel
+      (, uint256 missingQuote) = amountOut.trySub(quoteBalance);
+      if (missingQuote > 0) {
+        // Withdraw missing QUOTE from Kandel
+        kandel.withdrawFunds(0, missingQuote, address(this));
+        quoteBalance += missingQuote;
+      }
+      // Approve the swap target to spend QUOTE
+      IERC20(QUOTE).forceApprove(target, amountOut);
     }
 
-    {
-      heap.amountOutBalance = heap.tokenOut.balanceOf(address(this));
-      heap.amountInBalance = heap.tokenIn.balanceOf(address(this));
-    }
-
-    heap.tokenOut.forceApprove(target, amountOut);
-
+    // Execute the swap
     target.functionCall(data);
 
-    heap.tokenOut.forceApprove(target, 0);
+    // Get new balances after the swap
+    (uint256 newBaseBalance, uint256 newQuoteBalance) = getVaultBalances();
 
-    {
-      heap.newAmountOutBalance = heap.tokenOut.balanceOf(address(this));
-      heap.newAmountInBalance = heap.tokenIn.balanceOf(address(this));
+    // Calculate net changes in BASE and QUOTE
+    int256 netBaseChange = newBaseBalance.toInt256() - baseBalance.toInt256();
+    int256 netQuoteChange = newQuoteBalance.toInt256() - quoteBalance.toInt256();
+
+    if (sell) {
+      // Check if the received QUOTE meets the minimum amount
+      if (netQuoteChange < amountInMin.toInt256()) revert MangroveVaultErrors.IncorrectSlippage();
+      // Reset approval for BASE
+      IERC20(BASE).forceApprove(target, 0);
+    } else {
+      // Check if the received BASE meets the minimum amount
+      if (netBaseChange < amountInMin.toInt256()) revert MangroveVaultErrors.IncorrectSlippage();
+      // Reset approval for QUOTE
+      IERC20(QUOTE).forceApprove(target, 0);
     }
+    emit MangroveVaultEvents.Swap(address(kandel), netBaseChange, netQuoteChange, sell);
 
-    if (heap.newAmountInBalance < heap.amountInBalance + amountInMin) {
-      revert MangroveVaultErrors.IncorrectSlippage();
-    }
-
-    if (depositAll) {
-      if (heap.newAmountOutBalance > 0) {
-        heap.tokenOut.forceApprove(address(kandel), heap.newAmountOutBalance);
-      }
-      if (heap.newAmountInBalance > 0) {
-        heap.tokenIn.forceApprove(address(kandel), heap.newAmountInBalance);
-      }
-
-      if (sellToken0) {
-        kandel.depositFunds(heap.newAmountOutBalance, heap.newAmountInBalance);
-      } else {
-        kandel.depositFunds(heap.newAmountInBalance, heap.newAmountOutBalance);
-      }
-    }
-
-    heap.netAmountOut = heap.newAmountOutBalance.toInt256() - heap.amountOutBalance.toInt256();
-
-    emit MangroveVaultEvents.Swap(
-      address(kandel),
-      Math.ternary(heap.netAmountOut < 0, 0, uint256(heap.netAmountOut)),
-      heap.newAmountInBalance - heap.amountInBalance,
-      sellToken0
-    );
+    _updatePosition();
   }
 
-  function withdrawFromMangrove(uint256 amount) public onlyOwner {
-    kandel.withdrawFromMangrove(amount, payable(msg.sender));
+  function setPosition(KandelPosition memory position) public onlyOwner {
+    _setPosition(position);
+    _updatePosition();
+  }
+
+  function withdrawFromMangrove(uint256 amount, address payable receiver) public onlyOwner {
+    kandel.withdrawFromMangrove(amount, receiver);
+  }
+
+  function withdrawERC20(address token, uint256 amount) public onlyOwner {
+    // We can not withdraw the vault's own tokens, nor BASE nor QUOTE from this function
+    if (token == BASE || token == QUOTE || token == address(this)) {
+      revert MangroveVaultErrors.CannotWithdrawToken(token);
+    }
+    IERC20(token).safeTransfer(msg.sender, amount);
+  }
+
+  function withdrawNative() public onlyOwner {
+    payable(msg.sender).transfer(address(this).balance);
   }
 
   function pause() public onlyOwner {
@@ -462,31 +621,28 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
     _unpause();
   }
 
-  // internal functions
+  receive() external payable {
+    _fundMangrove();
+  }
 
-  function _currentFirstAskIndex() private view returns (uint256 i) {
-    (,,, uint32 _pricePoints) = kandelParams();
-    for (; i < _pricePoints; i++) {
-      if (kandel.getOffer(OfferType.Bid, i).gives() == 0) {
-        break;
-      }
-    }
+  function _currentTick() internal view returns (Tick) {
+    return oracle.tick();
+  }
+
+  function _toQuoteAmount(uint256 amountBase, uint256 amountQuote) internal view returns (uint256) {
+    Tick tick = _currentTick();
+    return amountQuote + tick.inboundFromOutboundUp(amountBase);
   }
 
   function _depositAllFunds() internal {
-    IERC20 _token0 = IERC20(token0);
-    IERC20 _token1 = IERC20(token1);
-
-    uint256 token0Balance = _token0.balanceOf(address(this));
-    uint256 token1Balance = _token1.balanceOf(address(this));
-
-    if (token0Balance > 0) {
-      _token0.forceApprove(address(kandel), token0Balance);
+    (uint256 baseBalance, uint256 quoteBalance) = getVaultBalances();
+    if (baseBalance > 0) {
+      IERC20(BASE).forceApprove(address(kandel), baseBalance);
     }
-    if (token1Balance > 0) {
-      _token1.forceApprove(address(kandel), token1Balance);
+    if (quoteBalance > 0) {
+      IERC20(QUOTE).forceApprove(address(kandel), quoteBalance);
     }
-    kandel.depositFunds(token0Balance, token1Balance);
+    kandel.depositFunds(baseBalance, quoteBalance);
   }
 
   function _fullCurrentDistribution()
@@ -494,49 +650,12 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
     view
     returns (GeometricKandel.Distribution memory distribution, bool valid)
   {
-    (, uint24 gasreq, uint32 stepSize, uint32 pricePoints) = kandelParams();
-    uint256 firstAskIndex = _currentFirstAskIndex();
-    uint256 baseQuoteTickOffset = kandelTickOffset();
-    distribution = kandel.createDistribution(
-      0, pricePoints, tickIndex0, baseQuoteTickOffset, firstAskIndex, 1, 1, pricePoints, stepSize
-    );
-
-    uint256 nBids;
-    uint256 nAsks;
-
-    for (uint256 i = 0; i < pricePoints; i++) {
-      if (distribution.bids[i].gives > 0) {
-        nBids++;
-      }
-      if (distribution.asks[i].gives > 0) {
-        nAsks++;
-      }
-    }
-
-    // get kandel balances
-    (uint256 kandelBalance0, uint256 kandelBalance1) = getKandelBalances();
-
-    uint256 bidGives = kandelBalance0 / nBids;
-    uint256 askGives = kandelBalance1 / nAsks;
-
-    for (uint256 i = 0; i < pricePoints; i++) {
-      if (distribution.bids[i].gives > 0) {
-        distribution.bids[i].gives = bidGives;
-      }
-      if (distribution.asks[i].gives > 0) {
-        distribution.asks[i].gives = askGives;
-      }
-    }
-
-    // // get min bid and ask volume required on mgv
-    // (OLKey memory olKeyBid, OLKey memory olKeyAsk) = markets();
-    // Local localBid = MGV.local(olKeyBid);
-    // Local localAsk = MGV.local(olKeyAsk);
-
-    // uint256 minBidVolume = localBid.density().multiplyUp(gasreq + localBid.offer_gasbase());
-    // uint256 minAskVolume = localAsk.density().multiplyUp(gasreq + localAsk.offer_gasbase());
-
-    // valid = bidGives >= minBidVolume && askGives >= minAskVolume;
+    Params memory params;
+    uint256 bidGives;
+    uint256 askGives;
+    (distribution, params, bidGives, askGives) = kandel.distribution(tickIndex0, _currentTick());
+    (uint256 bidVolume, uint256 askVolume) = MGV.minVolumes(OLKey(BASE, QUOTE, TICK_SPACING), params.gasreq);
+    valid = bidGives >= bidVolume && askGives >= askVolume;
   }
 
   function _refillPosition() internal {
@@ -548,18 +667,8 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
       }
     }
     if (!valid) {
-      _withdrawAllOffers();
+      kandel.withdrawAllOffers();
     }
-  }
-
-  function _withdrawAllOffers() internal {
-    (,,, uint32 pricePoints) = kandelParams();
-    kandel.retractOffers(0, pricePoints);
-  }
-
-  function _withdrawAllFundsAndOffers() internal {
-    (,,, uint32 pricePoints) = kandelParams();
-    kandel.retractAndWithdraw(0, pricePoints, type(uint256).max, type(uint256).max, 0, payable(address(this)));
   }
 
   function _updatePosition() internal {
@@ -568,9 +677,56 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable {
       _refillPosition();
     } else if (fundsState == FundsState.Passive) {
       _depositAllFunds();
-      _withdrawAllOffers();
+      kandel.withdrawAllOffers();
     } else {
-      _withdrawAllFundsAndOffers();
+      kandel.withdrawAllOffersAndFundsTo(payable(address(this)));
+    }
+  }
+
+  function _setPosition(KandelPosition memory position) internal {
+    tickIndex0 = position.tickIndex0;
+
+    kandel.setBaseQuoteTickOffset(position.tickOffset);
+
+    GeometricKandel.Params memory params;
+    Params memory _params = position.params;
+
+    assembly {
+      params := _params
+    }
+
+    GeometricKandel.Distribution memory distribution;
+
+    kandel.populate{value: msg.value}(distribution, params, 0, 0);
+
+    MangroveVaultEvents.emitSetKandelPosition(position);
+  }
+
+  function _fundMangrove() internal {
+    MGV.fund{value: msg.value}(address(kandel));
+  }
+
+  function _updateLastTotalInQuote(uint256 totalInQuote) internal {
+    lastTotalInQuote = totalInQuote;
+
+    emit MangroveVaultEvents.UpdateLastTotalInQuote(totalInQuote);
+  }
+
+  function _accrueFee() internal returns (uint256 newTotalInQuote) {
+    uint256 feeShares;
+    (feeShares, newTotalInQuote) = _accruedFeeShares();
+    if (feeShares > 0) {
+      _mint(feeRecipient, feeShares);
+    }
+    emit MangroveVaultEvents.AccrueInterest(feeShares, newTotalInQuote);
+  }
+
+  function _accruedFeeShares() internal view returns (uint256 feeShares, uint256 newTotalInQuote) {
+    newTotalInQuote = getTotalInQuote();
+    (, uint256 interest) = newTotalInQuote.trySub(lastTotalInQuote);
+    if (interest != 0 && fee != 0) {
+      uint256 feeQuote = interest.mulDiv(fee, MangroveVaultConstants.FEE_PRECISION);
+      feeShares = Math.mulDiv(feeQuote, totalSupply(), newTotalInQuote - interest, Math.Rounding.Floor);
     }
   }
 }

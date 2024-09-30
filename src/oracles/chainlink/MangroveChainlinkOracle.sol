@@ -42,10 +42,10 @@ contract MangroveChainlinkOracle is IOracle {
   uint256 public immutable quoteFeed2QuoteDecimals;
 
   constructor(
-    AggregatorV3Interface _baseFeed1,
-    AggregatorV3Interface _baseFeed2,
-    AggregatorV3Interface _quoteFeed1,
-    AggregatorV3Interface _quoteFeed2,
+    address _baseFeed1,
+    address _baseFeed2,
+    address _quoteFeed1,
+    address _quoteFeed2,
     uint256 _baseFeed1BaseDecimals,
     uint256 _baseFeed1QuoteDecimals,
     uint256 _baseFeed2BaseDecimals,
@@ -55,10 +55,10 @@ contract MangroveChainlinkOracle is IOracle {
     uint256 _quoteFeed2BaseDecimals,
     uint256 _quoteFeed2QuoteDecimals
   ) {
-    baseFeed1 = _baseFeed1;
-    baseFeed2 = _baseFeed2;
-    quoteFeed1 = _quoteFeed1;
-    quoteFeed2 = _quoteFeed2;
+    baseFeed1 = AggregatorV3Interface(_baseFeed1);
+    baseFeed2 = AggregatorV3Interface(_baseFeed2);
+    quoteFeed1 = AggregatorV3Interface(_quoteFeed1);
+    quoteFeed2 = AggregatorV3Interface(_quoteFeed2);
 
     baseFeed1Decimals = baseFeed1.getDecimals();
     baseFeed2Decimals = baseFeed2.getDecimals();
