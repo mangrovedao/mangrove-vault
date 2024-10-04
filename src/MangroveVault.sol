@@ -31,6 +31,8 @@ import {MangroveVaultConstants} from "./lib/MangroveVaultConstants.sol";
 import {MangroveVaultErrors} from "./lib/MangroveVaultErrors.sol";
 import {MangroveVaultEvents} from "./lib/MangroveVaultEvents.sol";
 
+import {console2 as console} from "forge-std/console2.sol";
+
 enum FundsState {
   Vault, // Funds are in the vault
   Passive, // Funds are in the kandel contract, but not actively listed on Mangrove
@@ -38,7 +40,12 @@ enum FundsState {
 
 }
 
-// TODO: cap vault balance
+struct InitialParams {
+  uint256 initialMaxTotalInQuote;
+  uint256 performanceFee;
+  uint256 managementFee;
+  address feeRecipient;
+}
 
 struct KandelPosition {
   Tick tickIndex0;
@@ -51,6 +58,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   using SafeERC20 for IERC20;
   using Address for address;
   using SafeCast for uint256;
+  using SafeCast for int256;
   using Math for uint256;
   using GeometricKandelExtra for GeometricKandel;
   using MangroveLib for IMangrove;
@@ -79,24 +87,35 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   /// @notice The number of decimals of the LP token.
   uint8 public immutable DECIMALS;
 
-  /// @notice The current state of the funds in the vault.
-  FundsState public fundsState;
+  /// @notice The oracle used to get the price of the token pair.
+  IOracle public immutable oracle;
 
   /// @notice A mapping to track which swap contracts are allowed.
   mapping(address => bool) public allowedSwapContracts;
 
-  /// @notice The tick index for the first offer in the Kandel contract.
-  /// @dev This is the tick index for the first offer in the Kandel contract (defined as a bid on the token0/token1 offer list).
-  Tick public tickIndex0;
-
-  /// @notice The oracle used to get the price of the token pair.
-  IOracle public immutable oracle;
-
+  /// @notice The last total in quote value.
   uint256 public lastTotalInQuote;
-  uint256 public maxTotalInQuote;
-  uint256 public fee; // 18 decimals
 
-  address public feeRecipient;
+  /// @notice The maximum total in quote value.
+  uint256 public maxTotalInQuote;
+
+  struct State {
+    /// @notice The current state of the funds in the vault.
+    FundsState fundsState; // 8 bits
+    /// @notice The tick index for the first offer in the Kandel contract.
+    /// @dev This is the tick index for the first offer in the Kandel contract (defined as a bid on the base/quote offer list).
+    int24 tickIndex0; // + 24 bits = 32 bits
+    /// @notice The address of the fee recipient.
+    address feeRecipient; // + 160 bits = 192 bits
+    /// @notice The last timestamp when the total in quote was updated.
+    uint32 lastTimestamp; // + 32 bits = 224 bits
+    /// @notice The performance fee.
+    uint16 performanceFee; // + 16 bits = 240 bits
+    /// @notice The management fee.
+    uint16 managementFee; // + 16 bits = 256 bits
+  }
+
+  State internal _state;
 
   /**
    * @notice Constructor for the MangroveVault contract.
@@ -117,7 +136,8 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     uint256 _decimalsOffset,
     string memory name,
     string memory symbol,
-    address _oracle
+    address _oracle,
+    InitialParams memory _initialParams
   ) Ownable(msg.sender) ERC20(name, symbol) ERC20Permit(name) {
     seeder = _seeder;
     TICK_SPACING = _tickSpacing;
@@ -127,6 +147,12 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     oracle = IOracle(_oracle);
     DECIMALS = (ERC20(QUOTE).decimals() + _decimalsOffset).toUint8();
     QUOTE_SCALE = 10 ** _decimalsOffset;
+
+    maxTotalInQuote = _initialParams.initialMaxTotalInQuote;
+    _state.performanceFee = _initialParams.performanceFee.toUint16();
+    _state.managementFee = _initialParams.managementFee.toUint16();
+    _state.feeRecipient = _initialParams.feeRecipient;
+    _state.lastTimestamp = block.timestamp.toUint32();
   }
 
   /**
@@ -156,6 +182,54 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    */
   function kandelTickOffset() public view returns (uint256) {
     return kandel.baseQuoteTickOffset();
+  }
+
+  /**
+   * @notice Retrieves the current tick at index 0 of the Kandel position.
+   * @return The tick index as an int24 value.
+   */
+  function tickIndex0() public view returns (int24) {
+    return _state.tickIndex0;
+  }
+
+  /**
+   * @notice Gets the address of the current fee recipient.
+   * @return The address of the fee recipient.
+   */
+  function feeRecipient() public view returns (address) {
+    return _state.feeRecipient;
+  }
+
+  /**
+   * @notice Retrieves the current performance fee rate.
+   * @return The performance fee rate as a uint16 value.
+   */
+  function performanceFee() public view returns (uint16) {
+    return _state.performanceFee;
+  }
+
+  /**
+   * @notice Retrieves the current management fee rate.
+   * @return The management fee rate as a uint16 value.
+   */
+  function managementFee() public view returns (uint16) {
+    return _state.managementFee;
+  }
+
+  /**
+   * @notice Gets the timestamp of the last fee accrual or relevant state update.
+   * @return The last timestamp as a uint32 value.
+   */
+  function lastTimestamp() public view returns (uint32) {
+    return _state.lastTimestamp;
+  }
+
+  /**
+   * @notice Gets the current tick of the Kandel position.
+   * @return The current tick
+   */
+  function currentTick() public view returns (Tick) {
+    return _currentTick();
   }
 
   /**
@@ -195,22 +269,24 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   /**
    * @notice Calculates the total value of the vault's assets in quote token.
    * @dev This function uses the oracle to convert the base token amount to quote token.
-   * @return The total value of the vault's assets in quote token.
+   * @return quoteAmount The total value of the vault's assets in quote token.
+   * @return tick The tick at which the conversion is made.
    */
-  function getTotalInQuote() public view returns (uint256) {
-    (uint256 baseAmount, uint256 quoteAmount) = getUnderlyingBalances();
-    return _toQuoteAmount(baseAmount, quoteAmount);
+  function getTotalInQuote() public view returns (uint256 quoteAmount, Tick tick) {
+    uint256 baseAmount;
+    (baseAmount, quoteAmount) = getUnderlyingBalances();
+    (quoteAmount, tick) = _toQuoteAmount(baseAmount, quoteAmount);
   }
 
   /**
-   * @notice Computes the shares that can be minted according to the maximum amounts of token0 and token1 provided.
+   * @notice Computes the shares that can be minted according to the maximum amounts of base and quote provided.
    * @param baseAmountMax The maximum amount of base that can be used for minting.
    * @param quoteAmountMax The maximum amount of quote that can be used for minting.
    * @return baseAmountOut The actual amount of base that will be deposited.
    * @return quoteAmountOut The actual amount of quote that will be deposited.
    * @return shares The amount of shares that will be minted.
    *
-   * @dev Reverts with `NoUnderlyingBalance` if both token0 and token1 balances are zero.
+   * @dev Reverts with `NoUnderlyingBalance` if both base and quote balances are zero.
    * @dev Reverts with `ZeroMintAmount` if the calculated shares to be minted is zero.
    */
   function getMintAmounts(uint256 baseAmountMax, uint256 quoteAmountMax)
@@ -225,7 +301,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     uint256 _totalSupply = totalSupply();
 
     // Accrue fee shares
-    (uint256 feeShares,) = _accruedFeeShares();
+    (uint256 feeShares,,) = _accruedFeeShares();
     _totalSupply += feeShares;
 
     // If there is already a total supply of shares
@@ -250,7 +326,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
         revert MangroveVaultErrors.ZeroMintAmount();
       }
 
-      // Calculate the actual amounts of token0 and token1 to be deposited
+      // Calculate the actual amounts of base and quote to be deposited
       baseAmountOut = Math.mulDiv(shares, baseAmount, _totalSupply, Math.Rounding.Ceil);
       quoteAmountOut = Math.mulDiv(shares, quoteAmount, _totalSupply, Math.Rounding.Ceil);
     }
@@ -286,18 +362,25 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     (uint256 baseBalance, uint256 quoteBalance) = getUnderlyingBalances();
     uint256 _totalSupply = totalSupply();
     // Accrue fee shares
-    (uint256 feeShares,) = _accruedFeeShares();
+    (uint256 feeShares,,) = _accruedFeeShares();
     _totalSupply += feeShares;
     if (_totalSupply == 0) {
       return (0, 0);
     }
-    baseAmount = Math.mulDiv(share, baseBalance, _totalSupply, Math.Rounding.Floor);
-    quoteAmount = Math.mulDiv(share, quoteBalance, _totalSupply, Math.Rounding.Floor);
+    baseAmount = share.mulDiv(baseBalance, _totalSupply, Math.Rounding.Floor);
+    quoteAmount = share.mulDiv(quoteBalance, _totalSupply, Math.Rounding.Floor);
   }
 
   // interact functions
 
+  function fundMangrove() public payable {
+    _fundMangrove();
+  }
+
   struct MintHeap {
+    uint256 totalInQuote;
+    bool totalInQuoteNoOverflow;
+    uint256 newTotalInQuote;
     uint256 totalSupply;
     uint256 baseBalance;
     uint256 quoteBalance;
@@ -338,14 +421,17 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   {
     if (mintAmount == 0) revert MangroveVaultErrors.ZeroMintAmount();
 
-    _updateLastTotalInQuote(_accrueFee());
-
     // Initialize a MintHeap struct to store temporary variables
     MintHeap memory heap;
+
+    (heap.totalInQuote, heap.tick) = _accrueFee();
+
+    _updateLastTotalInQuote(heap.totalInQuote);
+
     // Get the current total supply of shares
     heap.totalSupply = totalSupply();
     // Get the current funds state
-    heap.fundsState = fundsState;
+    heap.fundsState = _state.fundsState;
 
     // If there are existing shares
     if (heap.totalSupply != 0) {
@@ -357,11 +443,9 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     }
     // If it's the initial mint and funds state is not Unset
     else {
-      // Get the current oracle price
-      heap.tick = _currentTick();
-      // Calculate token0 amount based on max token1 amount and current price
+      // Calculate base amount based on max quote amount and current price
       heap.baseAmount = heap.tick.outboundFromInbound(quoteAmountMax);
-      // If calculated token0 amount exceeds max, adjust amounts
+      // If calculated base amount exceeds max, adjust amounts
       if (heap.baseAmount > baseAmountMax) {
         heap.baseAmount = baseAmountMax;
         heap.quoteAmount = heap.tick.inboundFromOutboundUp(baseAmountMax);
@@ -383,6 +467,18 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
       revert MangroveVaultErrors.IncorrectSlippage();
     }
 
+    // check if the new total in quote overflows or if it is greater than maxTotalInQuote
+    (heap.totalInQuoteNoOverflow, heap.newTotalInQuote) =
+      heap.totalInQuote.tryAdd(_toQuoteAmount(heap.baseAmount, heap.quoteAmount, heap.tick));
+
+    if (!heap.totalInQuoteNoOverflow) {
+      revert MangroveVaultErrors.QuoteAmountOverflow();
+    }
+
+    if (heap.newTotalInQuote > maxTotalInQuote) {
+      revert MangroveVaultErrors.DepositExceedsMaxTotal();
+    }
+
     // Get token interfaces
     heap.base = IERC20(BASE);
     heap.quote = IERC20(QUOTE);
@@ -397,13 +493,16 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     // Update the vault's position
     _updatePosition();
 
-    _updateLastTotalInQuote(getTotalInQuote());
+    // Here we assume the sum of the previous total and the deposited amount is the new total in quote and take a snapshot
+    // This then should truly account for performance from the deposit
+    _updateLastTotalInQuote(heap.newTotalInQuote);
 
     // Return minted shares and deposited token amounts
     return (mintAmount, heap.baseAmount, heap.quoteAmount);
   }
 
   struct BurnHeap {
+    uint256 totalInQuote;
     uint256 totalSupply;
     uint256 vaultBalanceBase;
     uint256 vaultBalanceQuote;
@@ -433,9 +532,10 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   {
     if (shares == 0) revert MangroveVaultErrors.ZeroShares();
 
-    _updateLastTotalInQuote(_accrueFee());
-
     BurnHeap memory heap;
+
+    (heap.totalInQuote,) = _accrueFee();
+    _updateLastTotalInQuote(heap.totalInQuote);
 
     // Calculate the proportion of total assets to withdraw
     heap.totalSupply = totalSupply();
@@ -471,7 +571,8 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     // Update the vault's position
     _updatePosition();
 
-    _updateLastTotalInQuote(getTotalInQuote());
+    (uint256 quoteAmountTotal,) = getTotalInQuote();
+    _updateLastTotalInQuote(quoteAmountTotal);
 
     // Set the return values
     amountBaseOut = heap.underlyingBalanceBase;
@@ -611,6 +712,22 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _unpause();
   }
 
+  function setPerformanceFee(uint256 _fee) public onlyOwner {
+    if (_fee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) revert MangroveVaultErrors.MaxFeeExceeded();
+    _state.performanceFee = _fee.toUint16();
+  }
+
+
+  function setManagementFee(uint256 _fee) public onlyOwner {
+    if (_fee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) revert MangroveVaultErrors.MaxFeeExceeded();
+    _state.managementFee = _fee.toUint16();
+  }
+
+  function setFeeRecipient(address _feeRecipient) public onlyOwner {
+    if (_feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
+    _state.feeRecipient = _feeRecipient;
+  }
+
   receive() external payable {
     _fundMangrove();
   }
@@ -619,9 +736,21 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     return oracle.tick();
   }
 
-  function _toQuoteAmount(uint256 amountBase, uint256 amountQuote) internal view returns (uint256) {
-    Tick tick = _currentTick();
-    return amountQuote + tick.inboundFromOutboundUp(amountBase);
+  function _toQuoteAmount(uint256 amountBase, uint256 amountQuote)
+    internal
+    view
+    returns (uint256 quoteAmount, Tick tick)
+  {
+    tick = _currentTick();
+    quoteAmount = _toQuoteAmount(amountBase, amountQuote, tick);
+  }
+
+  function _toQuoteAmount(uint256 amountBase, uint256 amountQuote, Tick tick)
+    internal
+    pure
+    returns (uint256 quoteAmount)
+  {
+    quoteAmount = amountQuote + tick.inboundFromOutboundUp(amountBase);
   }
 
   function _depositAllFunds() internal {
@@ -643,7 +772,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     Params memory params;
     uint256 bidGives;
     uint256 askGives;
-    (distribution, params, bidGives, askGives) = kandel.distribution(tickIndex0, _currentTick());
+    (distribution, params, bidGives, askGives) = kandel.distribution(Tick.wrap(_state.tickIndex0), _currentTick());
     (uint256 bidVolume, uint256 askVolume) = MGV.minVolumes(OLKey(BASE, QUOTE, TICK_SPACING), params.gasreq);
     valid = bidGives >= bidVolume && askGives >= askVolume;
   }
@@ -662,10 +791,10 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   }
 
   function _updatePosition() internal {
-    if (fundsState == FundsState.Active) {
+    if (_state.fundsState == FundsState.Active) {
       _depositAllFunds();
       _refillPosition();
-    } else if (fundsState == FundsState.Passive) {
+    } else if (_state.fundsState == FundsState.Passive) {
       _depositAllFunds();
       kandel.withdrawAllOffers();
     } else {
@@ -673,8 +802,22 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     }
   }
 
+  
+  /**
+   * @notice Sets the Kandel position for the vault
+   * @dev This function updates the Kandel parameters and populates the offer distribution
+   * @param position The KandelPosition struct containing the following fields:
+   *   - tickIndex0: The tick index for the first price point
+   *   - tickOffset: The tick offset between price points (must be a maximum of 24 bits wide)
+   *   - params: The Params struct containing:
+   *     - gasprice: The gas price for offer execution (if zero, stays unchanged)
+   *     - gasreq: The gas required for offer execution (if zero, stays unchanged)
+   *     - stepSize: The step size between offers
+   *     - pricePoints: The number of price points in the distribution
+   */
   function _setPosition(KandelPosition memory position) internal {
-    tickIndex0 = position.tickIndex0;
+    _state.tickIndex0 = Tick.unwrap(position.tickIndex0).toInt24();
+    _state.fundsState = position.fundsState;
 
     kandel.setBaseQuoteTickOffset(position.tickOffset);
 
@@ -698,25 +841,30 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
 
   function _updateLastTotalInQuote(uint256 totalInQuote) internal {
     lastTotalInQuote = totalInQuote;
-
-    emit MangroveVaultEvents.UpdateLastTotalInQuote(totalInQuote);
+    _state.lastTimestamp = block.timestamp.toUint32();
+    emit MangroveVaultEvents.UpdateLastTotalInQuote(totalInQuote, block.timestamp);
   }
 
-  function _accrueFee() internal returns (uint256 newTotalInQuote) {
+  function _accrueFee() internal returns (uint256 newTotalInQuote, Tick tick) {
     uint256 feeShares;
-    (feeShares, newTotalInQuote) = _accruedFeeShares();
+    (feeShares, newTotalInQuote, tick) = _accruedFeeShares();
     if (feeShares > 0) {
-      _mint(feeRecipient, feeShares);
+      _mint(_state.feeRecipient, feeShares);
     }
-    emit MangroveVaultEvents.AccrueInterest(feeShares, newTotalInQuote);
+    emit MangroveVaultEvents.AccrueInterest(feeShares, newTotalInQuote, block.timestamp);
   }
 
-  function _accruedFeeShares() internal view returns (uint256 feeShares, uint256 newTotalInQuote) {
-    newTotalInQuote = getTotalInQuote();
+  function _accruedFeeShares() internal view returns (uint256 feeShares, uint256 newTotalInQuote, Tick tick) {
+    (newTotalInQuote, tick) = getTotalInQuote();
     (, uint256 interest) = newTotalInQuote.trySub(lastTotalInQuote);
-    if (interest != 0 && fee != 0) {
-      uint256 feeQuote = interest.mulDiv(fee, MangroveVaultConstants.FEE_PRECISION);
-      feeShares = Math.mulDiv(feeQuote, totalSupply(), newTotalInQuote - interest, Math.Rounding.Floor);
+    (, uint256 timeElapsed) = block.timestamp.trySub(_state.lastTimestamp);
+    if ((interest != 0 && _state.performanceFee != 0) || (newTotalInQuote != 0 && _state.managementFee != 0 && timeElapsed > 0)) {
+      // Accrue performance fee
+      uint256 feeQuote = interest.mulDiv(_state.performanceFee, MangroveVaultConstants.PERFORMANCE_FEE_PRECISION);
+      // Accrue management fee
+      feeQuote += newTotalInQuote.mulDiv(_state.managementFee * timeElapsed, MangroveVaultConstants.MANAGEMENT_FEE_PRECISION);
+      // Fee shares to be minted
+      feeShares = feeQuote.mulDiv(totalSupply(), newTotalInQuote - feeQuote, Math.Rounding.Floor);
     }
   }
 }

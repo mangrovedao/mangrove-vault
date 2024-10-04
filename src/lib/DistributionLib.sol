@@ -44,8 +44,8 @@ library DistributionLib {
     returns (uint256 bidGives, uint256 askGives)
   {
     (uint256 nBids, uint256 nAsks) = distribution._countOffers();
-    (, bidGives) = baseAmount.tryDiv(nAsks);
-    (, askGives) = quoteAmount.tryDiv(nBids);
+    (, askGives) = baseAmount.tryDiv(nAsks);
+    (, bidGives) = quoteAmount.tryDiv(nBids);
     distribution._fillOffers(bidGives, askGives);
   }
 }

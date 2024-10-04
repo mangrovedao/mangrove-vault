@@ -21,9 +21,9 @@ library MangroveVaultEvents {
     FundsState fundsState
   );
 
-  event AccrueInterest(uint256 feeShares, uint256 newTotalInQuote);
+  event AccrueInterest(uint256 feeShares, uint256 newTotalInQuote, uint256 timestamp);
 
-  event UpdateLastTotalInQuote(uint256 lastTotalInQuote);
+  event UpdateLastTotalInQuote(uint256 lastTotalInQuote, uint256 timestamp);
 
   function emitSetKandelPosition(KandelPosition memory position) internal {
     emit SetKandelPosition(

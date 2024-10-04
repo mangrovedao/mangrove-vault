@@ -2,7 +2,7 @@
 pragma solidity ^0.8.13;
 
 import {Test, console} from "forge-std/Test.sol";
-import {MangroveVault, Tick} from "../src/MangroveVault.sol";
+import {MangroveVault, Tick, InitialParams, KandelPosition, FundsState, Params} from "../src/MangroveVault.sol";
 import {IMangrove, OLKey, Local} from "@mgv/src/IMangrove.sol";
 import {Mangrove} from "@mgv/src/core/Mangrove.sol";
 import {MgvReader, Market} from "@mgv/src/periphery/MgvReader.sol";
@@ -10,10 +10,26 @@ import {MgvOracle} from "@mgv/src/periphery/MgvOracle.sol";
 import {MangroveChainlinkOracle, AggregatorV3Interface} from "../src/oracles/chainlink/MangroveChainlinkOracle.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {KandelSeeder} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/KandelSeeder.sol";
-import {MAX_SAFE_VOLUME} from "@mgv/lib/core/Constants.sol";
+import {
+  AaveKandelSeeder,
+  IPoolAddressesProvider,
+  AbstractKandelSeeder
+} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/AaveKandelSeeder.sol";
+import {MAX_SAFE_VOLUME, MIN_TICK, MAX_TICK} from "@mgv/lib/core/Constants.sol";
 import {MangroveVaultConstants} from "../src/lib/MangroveVaultConstants.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {OfferType} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/TradesBaseQuotePair.sol";
+import {
+  CoreKandel,
+  DirectWithBidsAndAsksDistribution
+} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/CoreKandel.sol";
+
+import {ERC20Mock} from "../src/mock/ERC20.sol";
 
 contract MangroveVaultTest is Test {
+  using Math for uint256;
+
   IMangrove public mgv;
   MgvReader public reader;
   MgvOracle public oracle;
@@ -26,6 +42,9 @@ contract MangroveVaultTest is Test {
   ERC20 public USDT = ERC20(0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9);
   ERC20 public WeETH = ERC20(0x35751007a407ca6FEFfE80b3cB397736D2cf4dbe);
 
+  ERC20Mock public TokenA = new ERC20Mock("TOKEN A", "TOKA");
+  ERC20Mock public TokenB = new ERC20Mock("TOKEN B", "TOKB");
+
   AggregatorV3Interface public ETH_USD = AggregatorV3Interface(0x639Fe6ab55C921f74e7fac1ee960C0B6293ba612);
   AggregatorV3Interface public USDC_USD = AggregatorV3Interface(0x50834F3163758fcC1Df9973b6e91f0F0F0434aD3);
   AggregatorV3Interface public USDT_USD = AggregatorV3Interface(0x3f3f5dF88dC9F13eac63DF89EC16ef6e7E25DdE7);
@@ -37,10 +56,15 @@ contract MangroveVaultTest is Test {
   MangroveChainlinkOracle public WEETH_ETH_ORACLE;
 
   KandelSeeder public kandelSeeder;
+  AaveKandelSeeder public aaveKandelSeeder;
 
   uint256 public constant USD_DECIMALS = 18;
 
   uint256 arbitrumFork;
+
+  address owner;
+  address feeRecipient;
+  address user;
 
   function deployMangrove() internal {
     oracle = new MgvOracle({governance_: address(this), initialMutator_: address(this), initialGasPrice_: 1});
@@ -76,6 +100,10 @@ contract MangroveVaultTest is Test {
     vm.label(address(ETH_USD), "Chainlink ETH/USD");
     vm.label(address(USDC_USD), "Chainlink USDC/USD");
     vm.label(address(USDT_USD), "Chainlink USDT/USD");
+
+    owner = vm.createWallet("Owner").addr;
+    feeRecipient = vm.createWallet("Fee Recipient").addr;
+    user = vm.createWallet("User").addr;
 
     // Deploy the 3 oracles
 
@@ -127,6 +155,8 @@ contract MangroveVaultTest is Test {
     copyMangrove();
 
     kandelSeeder = new KandelSeeder(mgv, 128_000);
+    aaveKandelSeeder =
+      new AaveKandelSeeder(mgv, IPoolAddressesProvider(0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb), 628_000);
   }
 
   struct MarketWOracle {
@@ -170,17 +200,35 @@ contract MangroveVaultTest is Test {
   }
 
   function deployVault(uint8 market) internal returns (MangroveVault vault, MarketWOracle memory _market) {
+    return deployVault(market, kandelSeeder);
+  }
+
+  function deployVault(uint8 market, AbstractKandelSeeder seeder)
+    internal
+    returns (MangroveVault vault, MarketWOracle memory _market)
+  {
     _market = markets()[market];
+
+    InitialParams memory params = InitialParams({
+      initialMaxTotalInQuote: type(uint256).max,
+      performanceFee: 5e3, // 5%
+      managementFee: 1e3, // 1%
+      feeRecipient: feeRecipient
+    });
+
+    vm.startPrank(owner);
     vault = new MangroveVault(
-      kandelSeeder,
+      seeder,
       address(_market.base),
       address(_market.quote),
       1,
       18 - _market.quote.decimals(),
       "Mangrove Vault",
       "MGVv",
-      address(_market.oracle)
+      address(_market.oracle),
+      params
     );
+    vm.stopPrank();
   }
 
   function mintWithSpecifiedQuoteAmount(MangroveVault vault, MarketWOracle memory _market, uint256 quoteAmount)
@@ -198,25 +246,29 @@ contract MangroveVaultTest is Test {
     assertEq(quoteAmountOut, quoteAmount, "Quote amount out doesn't match specified quote amount");
 
     // deal the tokens
-    deal(address(_market.base), address(this), baseAmountOut);
-    deal(address(_market.quote), address(this), quoteAmountOut);
+    deal(address(_market.base), user, baseAmountOut);
+    deal(address(_market.quote), user, quoteAmountOut);
 
     // balance snapshot
-    uint256 baseBefore = _market.base.balanceOf(address(this));
-    uint256 quoteBefore = _market.quote.balanceOf(address(this));
-    uint256 sharesBefore = vault.balanceOf(address(this));
+    uint256 baseBefore = _market.base.balanceOf(user);
+    uint256 quoteBefore = _market.quote.balanceOf(user);
+    uint256 sharesBefore = vault.balanceOf(user);
+
+    vm.startPrank(user);
 
     _market.base.approve(address(vault), baseAmountOut);
     _market.quote.approve(address(vault), quoteAmountOut);
 
     vault.mint(shares, baseAmountOut, quoteAmountOut);
 
+    vm.stopPrank();
+
     // check that the balances are correct
-    assertEq(_market.base.balanceOf(address(this)), baseBefore - baseAmountOut);
-    assertEq(_market.quote.balanceOf(address(this)), quoteBefore - quoteAmountOut);
+    assertEq(_market.base.balanceOf(user), baseBefore - baseAmountOut);
+    assertEq(_market.quote.balanceOf(user), quoteBefore - quoteAmountOut);
 
     // check the shares balance is the correct one
-    assertEq(vault.balanceOf(address(this)), sharesBefore + shares, "Balance of shares doesn't match");
+    assertEq(vault.balanceOf(user), sharesBefore + shares, "Balance of shares doesn't match");
   }
 
   uint8[] public fixtureMarket = [0, 1, 2, 3];
@@ -250,6 +302,25 @@ contract MangroveVaultTest is Test {
     assertEq(vault.balanceOf(address(vault)), MangroveVaultConstants.MINIMUM_LIQUIDITY);
 
     // check simple functions
+    // total balances
+    (uint256 baseBalance, uint256 quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(baseBalance, _market.base.balanceOf(address(vault)));
+    assertEq(quoteBalance, _market.quote.balanceOf(address(vault)));
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(baseBalance, 0);
+    assertEq(quoteBalance, 0);
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, _market.base.balanceOf(address(vault)));
+    assertEq(quoteBalance, _market.quote.balanceOf(address(vault)));
+
+    // shares
+    (baseBalance, quoteBalance) = vault.getUnderlyingBalancesByShare(shares);
+    assertEq(baseBalance, _market.base.balanceOf(address(vault)) * shares / vault.totalSupply());
+    assertEq(quoteBalance, _market.quote.balanceOf(address(vault)) * shares / vault.totalSupply());
   }
 
   function testFuzz_initialAndSecondMint(uint8 market, uint128 quoteInitial, uint128 quoteSecond) public {
@@ -289,38 +360,497 @@ contract MangroveVaultTest is Test {
     (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
     vm.assume(quoteInitial >= BURN_PRECISION && quoteInitial < _market.maxQuote);
 
-    (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
-      mintWithSpecifiedQuoteAmount(vault, _market, quoteInitial);
+    (,, uint256 shares) = mintWithSpecifiedQuoteAmount(vault, _market, quoteInitial);
 
     uint256 sharesToBurn = (shares * burnProportion) / BURN_PRECISION;
+
+    console.log("sharesToBurn", sharesToBurn);
+    console.log("shares", shares);
+
     assertGt(sharesToBurn, 0, "Shares to burn should be greater than 0");
+    assertLe(sharesToBurn, shares, "Shares to burn should be less than or equal to total shares");
 
     (uint256 expectedBaseOut, uint256 expectedQuoteOut) = vault.getUnderlyingBalancesByShare(sharesToBurn);
 
+    vm.prank(user);
     (uint256 actualBaseOut, uint256 actualQuoteOut) = vault.burn(sharesToBurn, 0, 0);
 
     assertApproxEqRel(actualBaseOut, expectedBaseOut, 1e16, "Base amount out should be close to expected");
     assertApproxEqRel(actualQuoteOut, expectedQuoteOut, 1e16, "Quote amount out should be close to expected");
 
-    assertEq(vault.balanceOf(address(this)), shares - sharesToBurn, "Remaining shares should be correct");
+    assertEq(vault.balanceOf(user), shares - sharesToBurn, "Remaining shares should be correct");
+    assertApproxEqRel(_market.base.balanceOf(user), actualBaseOut, 1e16, "Base balance should be close to amount out");
     assertApproxEqRel(
-      _market.base.balanceOf(address(this)), actualBaseOut, 1e16, "Base balance should be close to amount out"
-    );
-    assertApproxEqRel(
-      _market.quote.balanceOf(address(this)), actualQuoteOut, 1e16, "Quote balance should be close to amount out"
+      _market.quote.balanceOf(user), actualQuoteOut, 1e16, "Quote balance should be close to amount out"
     );
   }
 
-  function test_deployKandel() public {
-    MangroveVault vault = new MangroveVault(
-      kandelSeeder, address(WETH), address(USDC), 1, 12, "Mangrove Vault", "MGVv", address(ETH_USDC_ORACLE)
+  struct PerformanceFeesTestHeap {
+    uint256 shares;
+    uint256 baseAmountUser;
+    uint256 quoteAmountUser;
+    uint256 baseAmount;
+    uint256 quoteAmount;
+    uint256 totalInQuote;
+    Tick tick;
+    uint256 baseAmountAfter;
+    uint256 quoteAmountAfter;
+    uint256 totalInQuoteAfter;
+    uint256 grossBaseAfter;
+    uint256 grossQuoteAfter;
+    uint256 totalInQuoteBefore;
+    uint256 grossTotalInQuoteAfter;
+    uint256 actualTotalInQuote;
+  }
+
+  function todo_testFuzz_PerformanceFees(uint8 market, uint128 quote, uint64 baseMultiplier, uint64 quoteMultiplier)
+    public
+  {
+    vm.assume(quote > MangroveVaultConstants.MINIMUM_LIQUIDITY);
+    vm.assume(market < markets().length);
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    vm.assume(quote < _market.maxQuote);
+
+    PerformanceFeesTestHeap memory heap;
+
+    // Mint
+    (,, heap.shares) = mintWithSpecifiedQuoteAmount(vault, _market, quote);
+    // Get the actual amount per share (not taking dead shares into account)
+    (heap.baseAmountUser, heap.quoteAmountUser) = vault.getUnderlyingBalancesByShare(heap.shares);
+    (heap.baseAmount, heap.quoteAmount) = vault.getUnderlyingBalances();
+    (heap.totalInQuote, heap.tick) = vault.getTotalInQuote();
+
+    // change the vault balance
+    deal(address(_market.base), address(vault), heap.baseAmount.mulDiv(baseMultiplier, 1e18));
+    deal(address(_market.quote), address(vault), heap.quoteAmount.mulDiv(quoteMultiplier, 1e18));
+
+    (heap.baseAmountAfter, heap.quoteAmountAfter) = vault.getUnderlyingBalancesByShare(heap.shares);
+    (heap.totalInQuoteAfter,) = vault.getTotalInQuote();
+
+    if (heap.totalInQuoteAfter > heap.totalInQuote) {
+      heap.totalInQuoteBefore = heap.quoteAmountUser + heap.tick.inboundFromOutboundUp(heap.baseAmountUser);
+
+      heap.grossBaseAfter = heap.baseAmountUser.mulDiv(baseMultiplier, 1e18);
+      heap.grossQuoteAfter = heap.quoteAmountUser.mulDiv(quoteMultiplier, 1e18);
+
+      heap.grossTotalInQuoteAfter = heap.grossQuoteAfter + heap.tick.inboundFromOutboundUp(heap.grossBaseAfter);
+
+      // uint256 perfQuote = (heap.grossTotalInQuoteAfter - heap.totalInQuoteBefore).mulDiv(
+      //   vault.performanceFee(), MangroveVaultConstants.PERFORMANCE_FEE_PRECISION
+      // );
+
+      // heap.actualTotalInQuote = heap.quoteAmountAfter + heap.tick.inboundFromOutboundUp(heap.baseAmountAfter);
+
+      // assertApproxEqRel(
+      //   heap.grossTotalInQuoteAfter - perfQuote,
+      //   heap.actualTotalInQuote,
+      //   0.01e16, // 0.01% precision
+      //   "Gross total in quote should be equal to actual total in quote"
+      // );
+
+      // uint netBaseAfter = grossBaseAfter.mulDiv(perfUnscaled, MangroveVaultConstants.PERFORMANCE_FEE_PRECISION);
+      // uint netQuoteAfter = grossQuoteAfter.mulDiv(perfUnscaled, MangroveVaultConstants.PERFORMANCE_FEE_PRECISION);
+
+      // assertEq(baseAmountAfter, netBaseAfter, "Base amount after should be equal to net base amount");
+      // assertEq(quoteAmountAfter, netQuoteAfter, "Quote amount after should be equal to net quote amount");
+
+      // Performance fees on the whole vault
+      // uint256 perfFees =
+      //   uint256(quoteAfter - quote).mulDiv(vault.performanceFee(), MangroveVaultConstants.PERFORMANCE_FEE_PRECISION);
+
+      // assertApproxEqAbs(
+      //   quoteAmountAfter,
+      //   (quoteAfter - perfFees).mulDiv(shares, vault.totalSupply()),
+      //   1,
+      //   "Quote amount after should be equal to quote amount minus fees"
+      // );
+    } else {
+      // No performance fees are taken on counter performance
+      // assertEq(
+      //   quoteAmountAfter,
+      //   uint256(quoteAfter).mulDiv(shares, vault.totalSupply()),
+      //   "Quote amount after should be equal to quote amount"
+      // );
+    }
+  }
+
+  function test_auth() public {
+    (MangroveVault vault,) = deployVault(0);
+
+    vm.startPrank(user);
+
+    bytes memory revertMsg = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(user));
+
+    vm.expectRevert(revertMsg);
+    vault.allowSwapContract(address(this));
+
+    vm.expectRevert(revertMsg);
+    vault.disallowSwapContract(address(this));
+
+    vm.expectRevert(revertMsg);
+    vault.swap(address(this), "", 0, 0, false);
+
+    KandelPosition memory position;
+    vm.expectRevert(revertMsg);
+    vault.setPosition(position);
+
+    vm.expectRevert(revertMsg);
+    vault.withdrawFromMangrove(0, payable(user));
+
+    vm.expectRevert(revertMsg);
+    vault.withdrawERC20(address(WETH), 0);
+
+    vm.expectRevert(revertMsg);
+    vault.withdrawNative();
+
+    vm.expectRevert(revertMsg);
+    vault.pause();
+
+    vm.expectRevert(revertMsg);
+    vault.unpause();
+
+    vm.expectRevert(revertMsg);
+    vault.setPerformanceFee(0);
+
+    vm.expectRevert(revertMsg);
+    vault.setManagementFee(0);
+
+    vm.expectRevert(revertMsg);
+    vault.setFeeRecipient(address(0));
+
+    vm.stopPrank();
+  }
+
+  function test_setPosition() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    (uint256 baseAmountOut, uint256 quoteAmountOut,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vault.fundMangrove{value: 1 ether}();
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    uint256 offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
+    uint256 offeredQuote = vault.kandel().offeredVolume(OfferType.Bid);
+
+    // delta is 10 due to the number of price points (floor rounding each offer amount)
+
+    assertApproxEqAbs(offeredBase, baseAmountOut, 10, "Offered base should be equal to baseAmountOut");
+    assertApproxEqAbs(offeredQuote, quoteAmountOut, 10, "Offered quote should be equal to quoteAmountOut");
+
+    (uint256 baseAmountOut2, uint256 quoteAmountOut2,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6);
+
+    offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
+    offeredQuote = vault.kandel().offeredVolume(OfferType.Bid);
+
+    assertApproxEqAbs(
+      offeredBase, baseAmountOut + baseAmountOut2, 10, "Offered base should be equal to baseAmountOut + baseAmountOut2"
+    );
+    assertApproxEqAbs(
+      offeredQuote,
+      quoteAmountOut + quoteAmountOut2,
+      10,
+      "Offered quote should be equal to quoteAmountOut + quoteAmountOut2"
     );
 
-    (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) = vault.getMintAmounts(1 ether, 3000e6);
-    deal(address(WETH), address(this), baseAmountOut);
-    deal(address(USDC), address(this), quoteAmountOut);
-    WETH.approve(address(vault), baseAmountOut);
-    USDC.approve(address(vault), quoteAmountOut);
-    vault.mint(shares, baseAmountOut, quoteAmountOut);
+    OLKey memory bids = OLKey(vault.QUOTE(), vault.BASE(), 1);
+    OLKey memory asks = OLKey(vault.BASE(), vault.QUOTE(), 1);
+
+    Tick bestBid = mgv.offers(bids, mgv.best(bids)).tick();
+    Tick bestAsk = mgv.offers(asks, mgv.best(asks)).tick();
+    Tick currentTick = vault.currentTick();
+
+    assertLe(
+      -Tick.unwrap(bestBid), Tick.unwrap(currentTick), "Best bid tick should be lower than or equal to current tick"
+    );
+    assertGe(
+      Tick.unwrap(bestAsk), Tick.unwrap(currentTick), "Best ask tick should be greater than or equal to current tick"
+    );
+  }
+
+  function test_denssityTooLow() public {
+    (MangroveVault vault,) = deployVault(0);
+
+    Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    address kandel = address(vault.kandel());
+
+    vm.prank(owner);
+    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 0);
+    vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 1);
+    vault.setPosition(
+      KandelPosition({
+        tickIndex0: tick,
+        tickOffset: 3,
+        fundsState: FundsState.Active,
+        params: Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10})
+      })
+    );
+  }
+
+  function test_NoFunds() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    address kandel = address(vault.kandel());
+
+    // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vm.prank(owner);
+    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 1);
+    vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 1);
+    vault.setPosition(
+      KandelPosition({
+        tickIndex0: tick,
+        tickOffset: 3,
+        fundsState: FundsState.Active,
+        params: Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10})
+      })
+    );
+  }
+
+  function test_DensityAndFunds() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    address kandel = address(vault.kandel());
+
+    (uint256 baseAmountOut, uint256 quoteAmountOut,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vault.fundMangrove{value: 1 ether}();
+
+    KandelPosition memory position;
+    position.tickIndex0 = tick;
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vm.prank(owner);
+    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 1);
+    vm.expectCall(kandel, abi.encodeWithSelector(DirectWithBidsAndAsksDistribution.retractOffers.selector), 0);
+    vault.setPosition(position);
+
+    uint256 offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
+    uint256 offeredQuote = vault.kandel().offeredVolume(OfferType.Bid);
+
+    assertApproxEqAbs(offeredBase, baseAmountOut, 10, "Offered base should be equal to baseAmountOut");
+    assertApproxEqAbs(offeredQuote, quoteAmountOut, 10, "Offered quote should be equal to quoteAmountOut");
+  }
+
+  function test_PassivefundState() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Passive;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    (uint256 baseAmountOut, uint256 quoteAmountOut,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    // total balances
+    (uint256 baseBalance, uint256 quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(baseBalance, baseAmountOut, "Base balance should be equal to baseAmountOut");
+    assertEq(quoteBalance, quoteAmountOut, "Quote balance should be equal to quoteAmountOut");
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(baseBalance, baseAmountOut, "Base balance should be in kandel");
+    assertEq(quoteBalance, quoteAmountOut, "Quote balance should be in kandel");
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, 0, "Base balance should not be in vault");
+    assertEq(quoteBalance, 0, "Quote balance should not be in vault");
+
+    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
+    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    assertEq(baseBalance, 0, "No offers should be made");
+    assertEq(quoteBalance, 0, "No offers should be made");
+  }
+
+  // TODO: test burning in active
+  function test_BurningInActive() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    address kandel = address(vault.kandel());
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
+      mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6 * 2); // 100_000 USD equivalent
+
+    // total balances
+    (uint256 baseBalance, uint256 quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(baseBalance, baseAmountOut, "Base balance should be equal to baseAmountOut");
+    assertEq(quoteBalance, quoteAmountOut, "Quote balance should be equal to quoteAmountOut");
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(baseBalance, baseAmountOut, "Base balance should be in kandel");
+    assertEq(quoteBalance, quoteAmountOut, "Quote balance should be in kandel");
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, 0, "Base balance should not be in vault");
+    assertEq(quoteBalance, 0, "Quote balance should not be in vault");
+
+    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
+    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    assertApproxEqAbs(baseBalance, baseAmountOut, 10, "Offered base should be equal to baseAmountOut");
+    assertApproxEqAbs(quoteBalance, quoteAmountOut, 10, "Offered quote should be equal to quoteAmountOut");
+
+    // burn half of the shares to keep the active position
+    uint256 sharesToBurn = shares / 2;
+    vm.prank(user);
+    (uint256 baseAmountReceived, uint256 quoteAmountReceived) = vault.burn(sharesToBurn, 0, 0);
+
+    // total balances
+    (baseBalance, quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(
+      baseBalance,
+      baseAmountOut - baseAmountReceived,
+      "Base balance should be equal to baseAmountOut - baseAmountReceived"
+    );
+    assertEq(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived,
+      "Quote balance should be equal to quoteAmountOut - quoteAmountReceived"
+    );
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(
+      baseBalance,
+      baseAmountOut - baseAmountReceived,
+      "Base balance should be equal to baseAmountOut - baseAmountReceived"
+    );
+    assertEq(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived,
+      "Quote balance should be equal to quoteAmountOut - quoteAmountReceived"
+    );
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, 0, "Base balance should not be in vault");
+    assertEq(quoteBalance, 0, "Quote balance should not be in vault");
+
+    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
+    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    assertApproxEqAbs(
+      baseBalance,
+      baseAmountOut - baseAmountReceived,
+      10,
+      "Offered base should be equal to baseAmountOut - baseAmountReceived"
+    );
+    assertApproxEqAbs(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived,
+      10,
+      "Offered quote should be equal to quoteAmountOut - quoteAmountReceived"
+    );
+
+    // burn 99.9% of the remaining shares to be below density
+    sharesToBurn = vault.balanceOf(user).mulDiv(999, 1000);
+    vm.prank(user);
+    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 0);
+    vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 1);
+    (uint256 baseAmountReceived2, uint256 quoteAmountReceived2) = vault.burn(sharesToBurn, 0, 0);
+
+    // total balances
+    (baseBalance, quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(
+      baseBalance,
+      baseAmountOut - baseAmountReceived - baseAmountReceived2,
+      "Base balance should be equal to baseAmountOut - baseAmountReceived - baseAmountReceived2"
+    );
+    assertEq(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived - quoteAmountReceived2,
+      "Quote balance should be equal to quoteAmountOut - quoteAmountReceived - quoteAmountReceived2"
+    );
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(
+      baseBalance,
+      baseAmountOut - baseAmountReceived - baseAmountReceived2,
+      "Base balance should be equal to baseAmountOut - baseAmountReceived - baseAmountReceived2"
+    );
+    assertEq(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived - quoteAmountReceived2,
+      "Quote balance should be equal to quoteAmountOut - quoteAmountReceived - quoteAmountReceived2"
+    );
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, 0, "Base balance should not be in vault");
+    assertEq(quoteBalance, 0, "Quote balance should not be in vault");
+
+    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
+    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    assertEq(baseBalance, 0, "No offers should be made");
+    assertEq(quoteBalance, 0, "No offers should be made");
+  }
+
+  // TODO: test burning in passive
+  // TODO: test swap in active
+  // TODO: test swap in passive
+  // TODO: test swap in vaults
+
+  function test_aave() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0, aaveKandelSeeder);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+  }
+
+  function test_deployKandel() public {
+    // MangroveVault vault = new MangroveVault(
+    //   kandelSeeder, address(WETH), address(USDC), 1, 12, "Mangrove Vault", "MGVv", address(ETH_USDC_ORACLE)
+    // );
+
+    // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) = vault.getMintAmounts(1 ether, 3000e6);
+    // deal(address(WETH), address(this), baseAmountOut);
+    // deal(address(USDC), address(this), quoteAmountOut);
+    // WETH.approve(address(vault), baseAmountOut);
+    // USDC.approve(address(vault), quoteAmountOut);
+    // vault.mint(shares, baseAmountOut, quoteAmountOut);
+
+    // deal(address(WETH), address(this), 1 ether);
+    // deal(address(WETH), address(this), 1 ether);
+    // revert();
   }
 }
