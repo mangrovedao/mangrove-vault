@@ -679,7 +679,6 @@ contract MangroveVaultTest is Test {
     assertEq(quoteBalance, 0, "No offers should be made");
   }
 
-  // TODO: test burning in active
   function test_BurningInActive() public {
     (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
 
@@ -719,9 +718,14 @@ contract MangroveVaultTest is Test {
     assertApproxEqAbs(baseBalance, baseAmountOut, 10, "Offered base should be equal to baseAmountOut");
     assertApproxEqAbs(quoteBalance, quoteAmountOut, 10, "Offered quote should be equal to quoteAmountOut");
 
+    // Expected call for the 2 next burns
+    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 1);
+    vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 1);
+
     // burn half of the shares to keep the active position
     uint256 sharesToBurn = shares / 2;
     vm.prank(user);
+    // will successfully populate (once)
     (uint256 baseAmountReceived, uint256 quoteAmountReceived) = vault.burn(sharesToBurn, 0, 0);
 
     // total balances
@@ -773,8 +777,7 @@ contract MangroveVaultTest is Test {
     // burn 99.9% of the remaining shares to be below density
     sharesToBurn = vault.balanceOf(user).mulDiv(999, 1000);
     vm.prank(user);
-    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 0);
-    vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 1);
+    // will not try to populate and retract offers (once)
     (uint256 baseAmountReceived2, uint256 quoteAmountReceived2) = vault.burn(sharesToBurn, 0, 0);
 
     // total balances
@@ -815,6 +818,82 @@ contract MangroveVaultTest is Test {
   }
 
   // TODO: test burning in passive
+  function test_BurningInPassive() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Passive;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
+      mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    // total balances
+    (uint256 baseBalance, uint256 quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(baseBalance, baseAmountOut, "Base balance should be equal to baseAmountOut");
+    assertEq(quoteBalance, quoteAmountOut, "Quote balance should be equal to quoteAmountOut");
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(baseBalance, baseAmountOut, "Base balance should be in kandel");
+    assertEq(quoteBalance, quoteAmountOut, "Quote balance should be in kandel");
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, 0, "Base balance should not be in vault");
+    assertEq(quoteBalance, 0, "Quote balance should not be in vault");
+
+    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
+    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    assertEq(baseBalance, 0, "No offers should be made");
+    assertEq(quoteBalance, 0, "No offers should be made");
+
+    // burn half of the shares
+    vm.prank(user);
+    (uint256 baseAmountReceived, uint256 quoteAmountReceived) = vault.burn(shares / 2, 0, 0);
+
+    // total balances
+    (baseBalance, quoteBalance) = vault.getUnderlyingBalances();
+    assertEq(
+      baseBalance,
+      baseAmountOut - baseAmountReceived,
+      "Base balance should be equal to baseAmountOut - baseAmountReceived"
+    );
+    assertEq(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived,
+      "Quote balance should be equal to quoteAmountOut - quoteAmountReceived"
+    );
+
+    // kandel balances
+    (baseBalance, quoteBalance) = vault.getKandelBalances();
+    assertEq(
+      baseBalance,
+      baseAmountOut - baseAmountReceived,
+      "Base balance should be equal to baseAmountOut - baseAmountReceived"
+    );
+    assertEq(
+      quoteBalance,
+      quoteAmountOut - quoteAmountReceived,
+      "Quote balance should be equal to quoteAmountOut - quoteAmountReceived"
+    );
+
+    // vault balances
+    (baseBalance, quoteBalance) = vault.getVaultBalances();
+    assertEq(baseBalance, 0, "Base balance should not be in vault");
+    assertEq(quoteBalance, 0, "Quote balance should not be in vault");
+
+    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
+    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    assertEq(baseBalance, 0, "No offers should be made");
+    assertEq(quoteBalance, 0, "No offers should be made");
+  }
+
   // TODO: test swap in active
   // TODO: test swap in passive
   // TODO: test swap in vaults
