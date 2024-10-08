@@ -30,4 +30,6 @@ library MangroveVaultErrors {
   error QuoteAmountOverflow();
 
   error DepositExceedsMaxTotal();
+
+  error CannotCallKandel();
 }

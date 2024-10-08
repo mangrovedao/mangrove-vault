@@ -632,6 +632,74 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     onlyOwner
     nonReentrant
   {
+    _swap(target, data, amountOut, amountInMin, sell);
+  }
+
+  function swapAndSetPosition(
+    address target,
+    bytes calldata data,
+    uint256 amountOut,
+    uint256 amountInMin,
+    bool sell,
+    KandelPosition memory position
+  ) public onlyOwner nonReentrant {
+    _setPosition(position);
+    _swap(target, data, amountOut, amountInMin, sell);
+  }
+
+  function setPosition(KandelPosition memory position) public onlyOwner {
+    _setPosition(position);
+    _updatePosition();
+  }
+
+  function withdrawFromMangrove(uint256 amount, address payable receiver) public onlyOwner {
+    kandel.withdrawFromMangrove(amount, receiver);
+  }
+
+  function withdrawERC20(address token, uint256 amount) public onlyOwner {
+    // We can not withdraw the vault's own tokens, nor BASE nor QUOTE from this function
+    if (token == BASE || token == QUOTE || token == address(this)) {
+      revert MangroveVaultErrors.CannotWithdrawToken(token);
+    }
+    IERC20(token).safeTransfer(msg.sender, amount);
+  }
+
+  function withdrawNative() public onlyOwner {
+    payable(msg.sender).transfer(address(this).balance);
+  }
+
+  function pause() public onlyOwner {
+    _pause();
+  }
+
+  function unpause() public onlyOwner {
+    _unpause();
+  }
+
+  function setPerformanceFee(uint256 _fee) public onlyOwner {
+    if (_fee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) revert MangroveVaultErrors.MaxFeeExceeded();
+    _state.performanceFee = _fee.toUint16();
+  }
+
+  function setManagementFee(uint256 _fee) public onlyOwner {
+    if (_fee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) revert MangroveVaultErrors.MaxFeeExceeded();
+    _state.managementFee = _fee.toUint16();
+  }
+
+  function setFeeRecipient(address _feeRecipient) public onlyOwner {
+    if (_feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
+    _state.feeRecipient = _feeRecipient;
+  }
+
+  receive() external payable {
+    _fundMangrove();
+  }
+
+  function _swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell) internal {
+    if (target == address(kandel)) {
+      revert MangroveVaultErrors.CannotCallKandel();
+    }
+
     // Get current balances of BASE and QUOTE tokens in the vault
     (uint256 baseBalance, uint256 quoteBalance) = getVaultBalances();
 
@@ -678,58 +746,9 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
       // Reset approval for QUOTE
       IERC20(QUOTE).forceApprove(target, 0);
     }
-    emit MangroveVaultEvents.Swap(address(kandel), netBaseChange, netQuoteChange, sell);
+    emit MangroveVaultEvents.Swap(target, netBaseChange, netQuoteChange, sell);
 
     _updatePosition();
-  }
-
-  function setPosition(KandelPosition memory position) public onlyOwner {
-    _setPosition(position);
-    _updatePosition();
-  }
-
-  function withdrawFromMangrove(uint256 amount, address payable receiver) public onlyOwner {
-    kandel.withdrawFromMangrove(amount, receiver);
-  }
-
-  function withdrawERC20(address token, uint256 amount) public onlyOwner {
-    // We can not withdraw the vault's own tokens, nor BASE nor QUOTE from this function
-    if (token == BASE || token == QUOTE || token == address(this)) {
-      revert MangroveVaultErrors.CannotWithdrawToken(token);
-    }
-    IERC20(token).safeTransfer(msg.sender, amount);
-  }
-
-  function withdrawNative() public onlyOwner {
-    payable(msg.sender).transfer(address(this).balance);
-  }
-
-  function pause() public onlyOwner {
-    _pause();
-  }
-
-  function unpause() public onlyOwner {
-    _unpause();
-  }
-
-  function setPerformanceFee(uint256 _fee) public onlyOwner {
-    if (_fee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) revert MangroveVaultErrors.MaxFeeExceeded();
-    _state.performanceFee = _fee.toUint16();
-  }
-
-
-  function setManagementFee(uint256 _fee) public onlyOwner {
-    if (_fee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) revert MangroveVaultErrors.MaxFeeExceeded();
-    _state.managementFee = _fee.toUint16();
-  }
-
-  function setFeeRecipient(address _feeRecipient) public onlyOwner {
-    if (_feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
-    _state.feeRecipient = _feeRecipient;
-  }
-
-  receive() external payable {
-    _fundMangrove();
   }
 
   function _currentTick() internal view returns (Tick) {
@@ -802,7 +821,6 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     }
   }
 
-  
   /**
    * @notice Sets the Kandel position for the vault
    * @dev This function updates the Kandel parameters and populates the offer distribution
@@ -858,11 +876,15 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     (newTotalInQuote, tick) = getTotalInQuote();
     (, uint256 interest) = newTotalInQuote.trySub(lastTotalInQuote);
     (, uint256 timeElapsed) = block.timestamp.trySub(_state.lastTimestamp);
-    if ((interest != 0 && _state.performanceFee != 0) || (newTotalInQuote != 0 && _state.managementFee != 0 && timeElapsed > 0)) {
+    if (
+      (interest != 0 && _state.performanceFee != 0)
+        || (newTotalInQuote != 0 && _state.managementFee != 0 && timeElapsed > 0)
+    ) {
       // Accrue performance fee
       uint256 feeQuote = interest.mulDiv(_state.performanceFee, MangroveVaultConstants.PERFORMANCE_FEE_PRECISION);
       // Accrue management fee
-      feeQuote += newTotalInQuote.mulDiv(_state.managementFee * timeElapsed, MangroveVaultConstants.MANAGEMENT_FEE_PRECISION);
+      feeQuote +=
+        newTotalInQuote.mulDiv(_state.managementFee * timeElapsed, MangroveVaultConstants.MANAGEMENT_FEE_PRECISION);
       // Fee shares to be minted
       feeShares = feeQuote.mulDiv(totalSupply(), newTotalInQuote - feeQuote, Math.Rounding.Floor);
     }

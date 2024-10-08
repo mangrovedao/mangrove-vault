@@ -22,10 +22,12 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {OfferType} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/TradesBaseQuotePair.sol";
 import {
   CoreKandel,
-  DirectWithBidsAndAsksDistribution
+  DirectWithBidsAndAsksDistribution,
+  IERC20
 } from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/CoreKandel.sol";
-
+import {MangroveVaultEvents} from "../src/lib/MangroveVaultEvents.sol";
 import {ERC20Mock} from "../src/mock/ERC20.sol";
+import {MangroveVaultErrors} from "../src/lib/MangroveVaultErrors.sol";
 
 contract MangroveVaultTest is Test {
   using Math for uint256;
@@ -894,10 +896,82 @@ contract MangroveVaultTest is Test {
     assertEq(quoteBalance, 0, "No offers should be made");
   }
 
+  function swapMock(ERC20 inbound, ERC20 outbound, uint256 inboundAmount, uint256 outboundAmount) public {
+    inbound.transferFrom(msg.sender, address(this), inboundAmount);
+    deal(address(outbound), address(this), outboundAmount);
+    outbound.transfer(msg.sender, outboundAmount);
+  }
+
+  function test_swap() public {
+    deal(address(WETH), user, 1 ether);
+    vm.startPrank(user);
+    WETH.approve(address(this), 1 ether);
+    MangroveVaultTest(address(this)).swapMock(WETH, USDC, 1 ether, 3000e6);
+    vm.stopPrank();
+
+    assertEq(WETH.balanceOf(user), 0, "WETH balance should be 0");
+    assertEq(USDC.balanceOf(user), 3000e6, "USDC balance should be 3000e6");
+  }
+
+  // TODO: test cannot call kandel
+  function test_cannotSwapWithKandel() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    address kandel = address(vault.kandel());
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vm.prank(owner);
+    vm.expectRevert(MangroveVaultErrors.CannotCallKandel.selector);
+    vault.swap(kandel, "", 1 ether, 0, true); // sell 1 WETH for USDC
+  }
+
   // TODO: test swap in active
+  function test_swapInActive() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    (uint256 baseAmountStart, uint256 quoteAmountStart) = vault.getUnderlyingBalances();
+
+    vm.prank(owner);
+
+    // Check data
+    vm.expectEmit(false, false, false, true, address(vault));
+    emit MangroveVaultEvents.Swap(address(this), -1 ether, 3000e6, true);
+    vault.swap(address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, 3000e6)), 1 ether, 0, true); // sell 1 WETH for USDC
+
+    (uint256 baseAmountEnd, uint256 quoteAmountEnd) = vault.getUnderlyingBalances();
+    assertEq(baseAmountEnd, baseAmountStart - 1 ether, "Base balance should be equal to baseAmountStart - 1 ether");
+    assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
+  }
   // TODO: test swap in passive
   // TODO: test swap in vaults
+  // TODO: test swap and set position
 
+  // TODO: test aave
   function test_aave() public {
     (MangroveVault vault, MarketWOracle memory _market) = deployVault(0, aaveKandelSeeder);
 
