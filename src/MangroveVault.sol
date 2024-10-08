@@ -99,19 +99,19 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   IMangrove public immutable MGV;
 
   /// @notice The address of the first token in the token pair.
-  address public immutable BASE;
+  address internal immutable BASE;
 
   /// @notice The address of the second token in the token pair.
-  address public immutable QUOTE;
+  address internal immutable QUOTE;
 
   /// @notice The tick spacing for the Mangrove market.
-  uint256 public immutable TICK_SPACING;
+  uint256 internal immutable TICK_SPACING;
 
   /// @notice The factor to scale the quote token amount by at initial mint.
-  uint256 public immutable QUOTE_SCALE;
+  uint256 internal immutable QUOTE_SCALE;
 
   /// @notice The number of decimals of the LP token.
-  uint8 public immutable DECIMALS;
+  uint8 internal immutable DECIMALS;
 
   /// @notice The oracle used to get the price of the token pair.
   IOracle public immutable oracle;
@@ -191,6 +191,17 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   }
 
   /**
+   * @notice Retrieves the current market information for the vault
+   * @dev This function returns the base token address, quote token address, and tick spacing for the market
+   * @return base The address of the base token in the market
+   * @return quote The address of the quote token in the market
+   * @return tickSpacing The tick spacing used in the market
+   */
+  function market() public view returns (address base, address quote, uint256 tickSpacing) {
+    return (BASE, QUOTE, TICK_SPACING);
+  }
+
+  /**
    * @notice Retrieves the parameters of the Kandel position.
    * @return params The parameters of the Kandel position.
    * * gasprice The gas price for the Kandel position (if 0 or lower than Mangrove gas price, will be set to Mangrove gas price).
@@ -233,27 +244,14 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   }
 
   /**
-   * @notice Gets the address of the current fee recipient.
-   * @return The address of the fee recipient.
+   * @notice Retrieves the current fee data for the vault
+   * @dev This function returns the performance fee, management fee, and fee recipient address
+   * @return performanceFee The current performance fee percentage as a uint16
+   * @return managementFee The current management fee percentage as a uint16
+   * @return feeRecipient The address of the current fee recipient
    */
-  function feeRecipient() public view returns (address) {
-    return _state.feeRecipient;
-  }
-
-  /**
-   * @notice Retrieves the current performance fee rate.
-   * @return The performance fee rate as a uint16 value.
-   */
-  function performanceFee() public view returns (uint16) {
-    return _state.performanceFee;
-  }
-
-  /**
-   * @notice Retrieves the current management fee rate.
-   * @return The management fee rate as a uint16 value.
-   */
-  function managementFee() public view returns (uint16) {
-    return _state.managementFee;
+  function feeData() public view returns (uint16 performanceFee, uint16 managementFee, address feeRecipient) {
+    return (_state.performanceFee, _state.managementFee, _state.feeRecipient);
   }
 
   /**
@@ -330,7 +328,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @dev Reverts with `ZeroAmount` if the calculated shares to be minted is zero.
    */
   function getMintAmounts(uint256 baseAmountMax, uint256 quoteAmountMax)
-    public
+    external
     view
     returns (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares)
   {
@@ -413,7 +411,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
 
   // interact functions
 
-  function fundMangrove() public payable {
+  function fundMangrove() external payable {
     _fundMangrove();
   }
 
@@ -454,7 +452,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    *      - unable to transfer tokens from user
    */
   function mint(uint256 mintAmount, uint256 baseAmountMax, uint256 quoteAmountMax)
-    public
+    external
     whenNotPaused
     nonReentrant
     returns (uint256 shares, uint256 baseAmount, uint256 quoteAmount)
@@ -572,7 +570,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @dev MangroveVaultErrors.IncorrectSlippage If the withdrawal amounts are less than the specified minimums
    */
   function burn(uint256 shares, uint256 minAmountBaseOut, uint256 minAmountQuoteOut)
-    public
+    external
     whenNotPaused
     nonReentrant
     returns (uint256 amountBaseOut, uint256 amountQuoteOut)
@@ -632,7 +630,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     emit MangroveVaultEvents.Burn(msg.sender, shares, amountBaseOut, amountQuoteOut, Tick.unwrap(heap.tick));
   }
 
-  function updatePosition() public {
+  function updatePosition() external {
     _updatePosition();
   }
 
@@ -643,7 +641,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @dev Can only be called by the owner of the contract
    * @param contractAddress The address of the contract to be allowed
    */
-  function allowSwapContract(address contractAddress) public onlyOwner {
+  function allowSwapContract(address contractAddress) external onlyOwner {
     if (contractAddress == address(0) || contractAddress == address(this) || contractAddress == address(kandel)) {
       revert MangroveVaultErrors.UnauthorizedSwapContract(contractAddress);
     }
@@ -657,7 +655,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @dev Can only be called by the owner of the contract
    * @param contractAddress The address of the contract to be disallowed
    */
-  function disallowSwapContract(address contractAddress) public onlyOwner {
+  function disallowSwapContract(address contractAddress) external onlyOwner {
     allowedSwapContracts[contractAddress] = false;
     emit MangroveVaultEvents.SwapContractAllowed(contractAddress, false);
   }
@@ -683,7 +681,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @param sell If true, sell BASE; otherwise, sell QUOTE
    */
   function swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell)
-    public
+    external
     onlyOwner
     nonReentrant
   {
@@ -697,21 +695,21 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     uint256 amountInMin,
     bool sell,
     KandelPosition memory position
-  ) public onlyOwner nonReentrant {
+  ) external onlyOwner nonReentrant {
     _setPosition(position);
     _swap(target, data, amountOut, amountInMin, sell);
   }
 
-  function setPosition(KandelPosition memory position) public onlyOwner {
+  function setPosition(KandelPosition memory position) external onlyOwner {
     _setPosition(position);
     _updatePosition();
   }
 
-  function withdrawFromMangrove(uint256 amount, address payable receiver) public onlyOwner {
+  function withdrawFromMangrove(uint256 amount, address payable receiver) external onlyOwner {
     kandel.withdrawFromMangrove(amount, receiver);
   }
 
-  function withdrawERC20(address token, uint256 amount) public onlyOwner {
+  function withdrawERC20(address token, uint256 amount) external onlyOwner {
     // We can not withdraw the vault's own tokens, nor BASE nor QUOTE from this function
     if (token == BASE || token == QUOTE || token == address(this)) {
       revert MangroveVaultErrors.CannotWithdrawToken(token);
@@ -719,19 +717,19 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     IERC20(token).safeTransfer(msg.sender, amount);
   }
 
-  function withdrawNative() public onlyOwner {
+  function withdrawNative() external onlyOwner {
     payable(msg.sender).transfer(address(this).balance);
   }
 
-  function pause() public onlyOwner {
+  function pause() external onlyOwner {
     _pause();
   }
 
-  function unpause() public onlyOwner {
+  function unpause() external onlyOwner {
     _unpause();
   }
 
-  function setPerformanceFee(uint256 _fee) public onlyOwner {
+  function setPerformanceFee(uint256 _fee) external onlyOwner {
     if (_fee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_PERFORMANCE_FEE, _fee);
     }
@@ -740,7 +738,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _state.performanceFee = _fee.toUint16();
   }
 
-  function setManagementFee(uint256 _fee) public onlyOwner {
+  function setManagementFee(uint256 _fee) external onlyOwner {
     if (_fee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_MANAGEMENT_FEE, _fee);
     }
@@ -749,7 +747,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _state.managementFee = _fee.toUint16();
   }
 
-  function setFeeRecipient(address _feeRecipient) public onlyOwner {
+  function setFeeRecipient(address _feeRecipient) external onlyOwner {
     if (_feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
     (uint256 totalInQuote,) = _accrueFee();
     _updateLastTotalInQuote(totalInQuote);

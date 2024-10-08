@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
 import {MangroveVault, Tick, InitialParams, KandelPosition, FundsState, Params} from "../src/MangroveVault.sol";
@@ -220,7 +220,7 @@ contract MangroveVaultTest is Test {
     _market = markets()[market];
 
     InitialParams memory params = InitialParams({
-      initialMaxTotalInQuote: type(uint256).max,
+      initialMaxTotalInQuote: type(uint128).max,
       performanceFee: 5e3, // 5%
       managementFee: 1e3, // 1%
       feeRecipient: feeRecipient,
@@ -586,12 +586,12 @@ contract MangroveVaultTest is Test {
     assertApproxEqAbs(
       offeredQuote,
       quoteAmountOut + quoteAmountOut2,
-      10,
+        10,
       "Offered quote should be equal to quoteAmountOut + quoteAmountOut2"
     );
 
-    OLKey memory bids = OLKey(vault.QUOTE(), vault.BASE(), 1);
-    OLKey memory asks = OLKey(vault.BASE(), vault.QUOTE(), 1);
+    OLKey memory bids = OLKey(address(_market.quote), address(_market.base), 1);
+    OLKey memory asks = OLKey(address(_market.base), address(_market.quote), 1);
 
     Tick bestBid = mgv.offers(bids, mgv.best(bids)).tick();
     Tick bestAsk = mgv.offers(asks, mgv.best(asks)).tick();

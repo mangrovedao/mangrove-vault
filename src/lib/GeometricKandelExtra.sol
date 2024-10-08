@@ -6,6 +6,7 @@ import {OfferType} from "@mgv-strats/src/strategies/offer_maker/market_making/ka
 import {OLKey, Local, IMangrove, Tick} from "@mgv/src/IMangrove.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {DistributionLib} from "./DistributionLib.sol";
+import {MangroveVaultEvents} from "./MangroveVaultEvents.sol";
 
 /**
  * @notice Parameters for configuring the Kandel strategy
@@ -22,20 +23,43 @@ struct Params {
   uint32 pricePoints;
 }
 
+/**
+ * @title GeometricKandelExtra
+ * @notice Library providing additional functionality for GeometricKandel
+ */
 library GeometricKandelExtra {
   using GeometricKandelExtra for GeometricKandel;
   using SafeCast for uint256;
   using DistributionLib for GeometricKandel.Distribution;
 
+  /**
+   * @notice Retrieves the parameters of a GeometricKandel instance
+   * @param kandel The GeometricKandel instance
+   * @return params_ The Params struct containing the kandel parameters
+   */
   function _params(GeometricKandel kandel) internal view returns (Params memory params_) {
     (params_.gasprice, params_.gasreq, params_.stepSize, params_.pricePoints) = kandel.params();
   }
 
+  /**
+   * @notice Gets the current balances of base and quote tokens for a GeometricKandel instance
+   * @param kandel The GeometricKandel instance
+   * @return baseAmount The amount of base tokens
+   * @return quoteAmount The amount of quote tokens
+   */
   function getBalances(GeometricKandel kandel) internal view returns (uint256 baseAmount, uint256 quoteAmount) {
     baseAmount = kandel.reserveBalance(OfferType.Ask);
     quoteAmount = kandel.reserveBalance(OfferType.Bid);
   }
 
+  /**
+   * @notice Calculates the index of the first ask offer
+   * @param tickIndex0 The tick at index 0
+   * @param midPrice The mid-price tick
+   * @param tickOffset The tick offset between price points
+   * @param pricePoints The total number of price points
+   * @return i The index of the first ask offer
+   */
   function _firstAskIndex(Tick tickIndex0, Tick midPrice, uint256 tickOffset, uint32 pricePoints)
     internal
     pure
@@ -50,8 +74,18 @@ library GeometricKandelExtra {
     }
   }
 
+  /**
+   * @notice Generates a distribution for a GeometricKandel instance
+   * @param kandel The GeometricKandel instance
+   * @param tickIndex0 The tick at index 0
+   * @param midPrice The mid-price tick
+   * @return _distribution The generated distribution
+   * @return params The Kandel parameters
+   * @return bidGives The amount given for bids
+   * @return askGives The amount given for asks
+   */
   function distribution(GeometricKandel kandel, Tick tickIndex0, Tick midPrice)
-    internal
+    public
     view
     returns (
       GeometricKandel.Distribution memory _distribution,
@@ -63,7 +97,7 @@ library GeometricKandelExtra {
     params = kandel._params();
     uint256 baseQuoteTickOffset = kandel.baseQuoteTickOffset();
     uint256 firstAskIndex_ = _firstAskIndex(tickIndex0, midPrice, baseQuoteTickOffset, params.pricePoints);
-    _distribution = kandel.createDistribution(
+    _distribution = DistributionLib.createGeometricDistribution(
       0,
       params.pricePoints,
       tickIndex0,
@@ -78,11 +112,20 @@ library GeometricKandelExtra {
     (bidGives, askGives) = _distribution.fillOffersWith(baseAmount, quoteAmount);
   }
 
+  /**
+   * @notice Withdraws all offers and funds to a specified address
+   * @param kandel The GeometricKandel instance
+   * @param to The address to withdraw to
+   */
   function withdrawAllOffersAndFundsTo(GeometricKandel kandel, address to) internal {
     Params memory params = kandel._params();
     kandel.retractAndWithdraw(0, params.pricePoints, type(uint256).max, type(uint256).max, 0, payable(to));
   }
 
+  /**
+   * @notice Withdraws all offers from the Kandel strategy
+   * @param kandel The GeometricKandel instance
+   */
   function withdrawAllOffers(GeometricKandel kandel) internal {
     Params memory params = kandel._params();
     kandel.retractOffers(0, params.pricePoints);
