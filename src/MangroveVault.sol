@@ -982,7 +982,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   /**
    * @notice Refills the Kandel position with offers
    * @dev This function attempts to post the distribution of offers to Mangrove.
-   *      It can revert if there is not enough provision (native token balance) 
+   *      It can revert if there is not enough provision (native token balance)
    *      for this Kandel on Mangrove to cover the bounties required for posting offers.
    */
   function _refillPosition() internal {
