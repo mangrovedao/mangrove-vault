@@ -32,8 +32,6 @@ import {MangroveVaultConstants} from "./lib/MangroveVaultConstants.sol";
 import {MangroveVaultErrors} from "./lib/MangroveVaultErrors.sol";
 import {MangroveVaultEvents} from "./lib/MangroveVaultEvents.sol";
 
-import {console2 as console} from "forge-std/console2.sol";
-
 /**
  * @notice Enum representing the state of funds in the vault
  * @dev This enum is used to track where the funds are currently located and their activity status
