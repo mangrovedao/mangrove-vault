@@ -586,7 +586,7 @@ contract MangroveVaultTest is Test {
     assertApproxEqAbs(
       offeredQuote,
       quoteAmountOut + quoteAmountOut2,
-        10,
+      10,
       "Offered quote should be equal to quoteAmountOut + quoteAmountOut2"
     );
 
