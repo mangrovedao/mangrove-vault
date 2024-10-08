@@ -575,8 +575,8 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @param minAmountQuoteOut The minimum amount of quote to receive (slippage protection)
    * @return amountBaseOut The actual amount of base withdrawn
    * @return amountQuoteOut The actual amount of quote withdrawn
-   * @dev MangroveVaultErrors.ZeroAmount If the number of shares to burn is zero
-   * @dev MangroveVaultErrors.IncorrectSlippage If the withdrawal amounts are less than the specified minimums
+   * @dev Reverts with MangroveVaultErrors.ZeroAmount if the number of shares to burn is zero
+   * @dev Reverts with MangroveVaultErrors.SlippageExceeded if the withdrawal amounts are less than the specified minimums
    */
   function burn(uint256 shares, uint256 minAmountBaseOut, uint256 minAmountQuoteOut)
     external
@@ -639,6 +639,11 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     emit MangroveVaultEvents.Burn(msg.sender, shares, amountBaseOut, amountQuoteOut, Tick.unwrap(heap.tick));
   }
 
+  /**
+   * @notice Updates the vault's position in the Kandel strategy
+   * @dev This function can be called by anyone to update the vault's position
+   *      It internally calls the private _updatePosition function
+   */
   function updatePosition() external {
     _updatePosition();
   }
@@ -697,6 +702,16 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _swap(target, data, amountOut, amountInMin, sell);
   }
 
+  /**
+   * @notice Executes a swap operation and updates the Kandel position in a single transaction
+   * @dev This function can only be called by the owner of the contract
+   * @param target The address of the contract to execute the swap on
+   * @param data The calldata to be sent to the target contract
+   * @param amountOut The amount of tokens to be swapped out
+   * @param amountInMin The minimum amount of tokens to be received
+   * @param sell If true, sell BASE; otherwise, sell QUOTE
+   * @param position The new Kandel position to be set
+   */
   function swapAndSetPosition(
     address target,
     bytes calldata data,
@@ -709,15 +724,33 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _swap(target, data, amountOut, amountInMin, sell);
   }
 
+  /**
+   * @notice Updates the Kandel position
+   * @dev This function can only be called by the owner of the contract
+   * @param position The new Kandel position to be set
+   */
   function setPosition(KandelPosition memory position) external onlyOwner {
     _setPosition(position);
     _updatePosition();
   }
 
+  /**
+   * @notice Withdraws funds from Mangrove to a specified receiver
+   * @dev This function can only be called by the owner of the contract
+   * @param amount The amount of funds to withdraw
+   * @param receiver The address to receive the withdrawn funds
+   */
   function withdrawFromMangrove(uint256 amount, address payable receiver) external onlyOwner {
     kandel.withdrawFromMangrove(amount, receiver);
   }
 
+  /**
+   * @notice Withdraws ERC20 tokens from the vault
+   * @dev This function can only be called by the owner of the contract
+   * @dev Cannot withdraw BASE, QUOTE, or the vault's own tokens
+   * @param token The address of the ERC20 token to withdraw
+   * @param amount The amount of tokens to withdraw
+   */
   function withdrawERC20(address token, uint256 amount) external onlyOwner {
     // We can not withdraw the vault's own tokens, nor BASE nor QUOTE from this function
     if (token == BASE || token == QUOTE || token == address(this)) {
@@ -726,18 +759,35 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     IERC20(token).safeTransfer(msg.sender, amount);
   }
 
+  /**
+   * @notice Withdraws native currency (e.g., ETH) from the vault
+   * @dev This function can only be called by the owner of the contract
+   */
   function withdrawNative() external onlyOwner {
     payable(msg.sender).transfer(address(this).balance);
   }
 
+  /**
+   * @notice Pauses the vault operations
+   * @dev This function can only be called by the owner of the contract
+   */
   function pause() external onlyOwner {
     _pause();
   }
 
+  /**
+   * @notice Unpauses the vault operations
+   * @dev This function can only be called by the owner of the contract
+   */
   function unpause() external onlyOwner {
     _unpause();
   }
 
+  /**
+   * @notice Sets the performance fee for the vault
+   * @dev This function can only be called by the owner of the contract
+   * @param _fee The new performance fee to be set
+   */
   function setPerformanceFee(uint256 _fee) external onlyOwner {
     if (_fee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_PERFORMANCE_FEE, _fee);
@@ -747,6 +797,11 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _state.performanceFee = _fee.toUint16();
   }
 
+  /**
+   * @notice Sets the management fee for the vault
+   * @dev This function can only be called by the owner of the contract
+   * @param _fee The new management fee to be set
+   */
   function setManagementFee(uint256 _fee) external onlyOwner {
     if (_fee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_MANAGEMENT_FEE, _fee);
@@ -756,6 +811,11 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _state.managementFee = _fee.toUint16();
   }
 
+  /**
+   * @notice Sets the fee recipient for the vault
+   * @dev This function can only be called by the owner of the contract
+   * @param _feeRecipient The address of the new fee recipient
+   */
   function setFeeRecipient(address _feeRecipient) external onlyOwner {
     if (_feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
     (uint256 totalInQuote,) = _accrueFee();
@@ -767,6 +827,24 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _fundMangrove();
   }
 
+  /**
+   * @notice Executes a swap operation using an external contract
+   * @dev This function can only be called by the owner of the contract
+   * @param target The address of the external swap contract
+   * @param data The calldata to be sent to the swap contract
+   * @param amountOut The amount of tokens to be swapped out
+   * @param amountInMin The minimum amount of tokens to be received in return
+   * @param sell If true, selling BASE token; if false, selling QUOTE token
+   * @dev This function performs the following steps:
+   * 1. Verifies that the target contract is authorized for swaps
+   * 2. Checks current token balances in the vault
+   * 3. Withdraws additional tokens from Kandel if necessary
+   * 4. Approves the swap contract to spend tokens
+   * 5. Executes the swap by calling the target contract
+   * 6. Verifies that the received amount meets the minimum requirement
+   * 7. Calculates and returns the net changes in token balances
+   *
+   */
   function _swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell) internal {
     if (!allowedSwapContracts[target]) {
       revert MangroveVaultErrors.UnauthorizedSwapContract(target);
@@ -830,10 +908,21 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _updatePosition();
   }
 
+  /**
+   * @notice Retrieves the current tick from the oracle
+   * @return The current tick value
+   */
   function _currentTick() internal view returns (Tick) {
     return oracle.tick();
   }
 
+  /**
+   * @notice Converts base and quote amounts to a total quote amount using the current tick
+   * @param amountBase The amount of base tokens
+   * @param amountQuote The amount of quote tokens
+   * @return quoteAmount The total amount in quote tokens
+   * @return tick The current tick used for the conversion
+   */
   function _toQuoteAmount(uint256 amountBase, uint256 amountQuote)
     internal
     view
@@ -843,6 +932,13 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     quoteAmount = _toQuoteAmount(amountBase, amountQuote, tick);
   }
 
+  /**
+   * @notice Converts base and quote amounts to a total quote amount using a specified tick
+   * @param amountBase The amount of base tokens
+   * @param amountQuote The amount of quote tokens
+   * @param tick The tick to use for the conversion
+   * @return quoteAmount The total amount in quote tokens
+   */
   function _toQuoteAmount(uint256 amountBase, uint256 amountQuote, Tick tick)
     internal
     pure
@@ -851,6 +947,9 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     quoteAmount = amountQuote + tick.inboundFromOutboundUp(amountBase);
   }
 
+  /**
+   * @notice Deposits all available funds from the vault to Kandel
+   */
   function _depositAllFunds() internal {
     (uint256 baseBalance, uint256 quoteBalance) = getVaultBalances();
     if (baseBalance > 0) {
@@ -862,6 +961,11 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     kandel.depositFunds(baseBalance, quoteBalance);
   }
 
+  /**
+   * @notice Retrieves the full current distribution of Kandel
+   * @return distribution The current Kandel distribution
+   * @return valid A boolean indicating if the distribution is valid
+   */
   function _fullCurrentDistribution()
     internal
     view
@@ -875,6 +979,12 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     valid = bidGives >= bidVolume && askGives >= askVolume;
   }
 
+  /**
+   * @notice Refills the Kandel position with offers
+   * @dev This function attempts to post the distribution of offers to Mangrove.
+   *      It can revert if there is not enough provision (native token balance) 
+   *      for this Kandel on Mangrove to cover the bounties required for posting offers.
+   */
   function _refillPosition() internal {
     (GeometricKandel.Distribution memory distribution, bool valid) = _fullCurrentDistribution();
     if (valid) {
@@ -888,6 +998,13 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     }
   }
 
+  /**
+   * @notice Updates the Kandel position based on the current funds state
+   * @dev This function performs the following actions for each state:
+   *      - Active: Deposits all funds to Kandel and refills the position with offers
+   *      - Passive: Deposits all funds to Kandel and withdraws all offers
+   *      - Vault: Withdraws all offers and funds from Kandel back to the vault
+   */
   function _updatePosition() internal {
     if (_state.fundsState == FundsState.Active) {
       _depositAllFunds();
@@ -936,12 +1053,23 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     MGV.fund{value: msg.value}(address(kandel));
   }
 
+  /**
+   * @notice Updates the last recorded total value in quote token and timestamp
+   * @dev This function is called internally to update the state after significant changes
+   * @param totalInQuote The new total value in quote token
+   */
   function _updateLastTotalInQuote(uint256 totalInQuote) internal {
     _state.lastTotalInQuote = totalInQuote.toUint128();
     _state.lastTimestamp = block.timestamp.toUint32();
     emit MangroveVaultEvents.UpdateLastTotalInQuote(totalInQuote, block.timestamp);
   }
 
+  /**
+   * @notice Calculates and mints fee shares, and returns the updated total value in quote
+   * @dev This function is called internally to accrue fees
+   * @return newTotalInQuote The updated total value in quote token
+   * @return tick The current tick from the oracle
+   */
   function _accrueFee() internal returns (uint256 newTotalInQuote, Tick tick) {
     uint256 feeShares;
     (feeShares, newTotalInQuote, tick) = _accruedFeeShares();
@@ -951,6 +1079,13 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     emit MangroveVaultEvents.AccrueInterest(feeShares, newTotalInQuote, block.timestamp);
   }
 
+  /**
+   * @notice Calculates the number of fee shares to be minted based on performance and management fees
+   * @dev This function is called internally to compute accrued fees
+   * @return feeShares The number of fee shares to be minted
+   * @return newTotalInQuote The updated total value in quote token
+   * @return tick The current tick from the oracle
+   */
   function _accruedFeeShares() internal view returns (uint256 feeShares, uint256 newTotalInQuote, Tick tick) {
     (newTotalInQuote, tick) = getTotalInQuote();
     (, uint256 interest) = newTotalInQuote.trySub(_state.lastTotalInQuote);
