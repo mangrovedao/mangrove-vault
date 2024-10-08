@@ -28,6 +28,10 @@ import {
 import {MangroveVaultEvents} from "../src/lib/MangroveVaultEvents.sol";
 import {ERC20Mock} from "../src/mock/ERC20.sol";
 import {MangroveVaultErrors} from "../src/lib/MangroveVaultErrors.sol";
+import {MangroveVaultFactory} from "../src/MangroveVaultFactory.sol";
+import {GeometricKandel} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/GeometricKandel.sol";
+import {HasIndexedBidsAndAsks} from
+  "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/HasIndexedBidsAndAsks.sol";
 
 contract MangroveVaultTest is Test {
   using Math for uint256;
@@ -59,6 +63,8 @@ contract MangroveVaultTest is Test {
 
   KandelSeeder public kandelSeeder;
   AaveKandelSeeder public aaveKandelSeeder;
+
+  MangroveVaultFactory public factory;
 
   uint256 public constant USD_DECIMALS = 18;
 
@@ -106,6 +112,8 @@ contract MangroveVaultTest is Test {
     owner = vm.createWallet("Owner").addr;
     feeRecipient = vm.createWallet("Fee Recipient").addr;
     user = vm.createWallet("User").addr;
+
+    factory = new MangroveVaultFactory();
 
     // Deploy the 3 oracles
 
@@ -215,11 +223,18 @@ contract MangroveVaultTest is Test {
       initialMaxTotalInQuote: type(uint256).max,
       performanceFee: 5e3, // 5%
       managementFee: 1e3, // 1%
-      feeRecipient: feeRecipient
+      feeRecipient: feeRecipient,
+      owner: owner
     });
 
+    OLKey memory olKey = OLKey(address(_market.base), address(_market.quote), 1);
+
     vm.startPrank(owner);
-    vault = new MangroveVault(
+    vm.expectEmit(true, true, true, false);
+    emit MangroveVaultEvents.VaultCreated(
+      address(seeder), olKey.hash(), olKey.flipped().hash(), address(0), address(0), address(0)
+    );
+    vault = factory.createVault(
       seeder,
       address(_market.base),
       address(_market.quote),
@@ -255,12 +270,15 @@ contract MangroveVaultTest is Test {
     uint256 baseBefore = _market.base.balanceOf(user);
     uint256 quoteBefore = _market.quote.balanceOf(user);
     uint256 sharesBefore = vault.balanceOf(user);
+    Tick tick = _market.oracle.tick();
 
     vm.startPrank(user);
 
     _market.base.approve(address(vault), baseAmountOut);
     _market.quote.approve(address(vault), quoteAmountOut);
 
+    vm.expectEmit(true, false, false, false, address(vault));
+    emit MangroveVaultEvents.Mint(user, shares, baseAmountOut, quoteAmountOut, Tick.unwrap(tick));
     vault.mint(shares, baseAmountOut, quoteAmountOut);
 
     vm.stopPrank();
@@ -536,7 +554,17 @@ contract MangroveVaultTest is Test {
     position.fundsState = FundsState.Active;
     position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
 
+    address kandel = address(vault.kandel());
+
     vm.prank(owner);
+    vm.expectEmit(false, false, false, true, kandel);
+    emit GeometricKandel.SetBaseQuoteTickOffset(position.tickOffset);
+    vm.expectEmit(false, false, false, true, kandel);
+    emit HasIndexedBidsAndAsks.SetLength(position.params.pricePoints);
+    vm.expectEmit(false, false, false, true, kandel);
+    emit CoreKandel.SetStepSize(position.params.stepSize);
+    vm.expectEmit(false, false, false, true, address(vault));
+    MangroveVaultEvents.emitSetKandelPosition(position);
     vault.setPosition(position);
 
     uint256 offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
@@ -913,8 +941,7 @@ contract MangroveVaultTest is Test {
     assertEq(USDC.balanceOf(user), 3000e6, "USDC balance should be 3000e6");
   }
 
-  // TODO: test cannot call kandel
-  function test_cannotSwapWithKandel() public {
+  function test_setUnauthorizedSwapContract() public {
     (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
 
     KandelPosition memory position;
@@ -933,11 +960,44 @@ contract MangroveVaultTest is Test {
     mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
 
     vm.prank(owner);
-    vm.expectRevert(MangroveVaultErrors.CannotCallKandel.selector);
-    vault.swap(kandel, "", 1 ether, 0, true); // sell 1 WETH for USDC
+    vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.UnauthorizedSwapContract.selector, kandel));
+    vault.allowSwapContract(kandel);
+
+    vm.prank(owner);
+    vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.UnauthorizedSwapContract.selector, address(0)));
+    vault.allowSwapContract(address(0));
+
+    vm.prank(owner);
+    vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.UnauthorizedSwapContract.selector, address(vault)));
+    vault.allowSwapContract(address(vault));
   }
 
-  // TODO: test swap in active
+  // TODO: test calling unauthorized swap contracts
+
+  function test_swapIncorrectSlippage() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vm.prank(owner);
+    vault.allowSwapContract(address(this));
+
+    vm.prank(owner);
+    vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.SlippageExceeded.selector, 3001e6, 3000e6));
+    vault.swap(address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, 3000e6)), 1 ether, 3001e6, true); // sell 1 WETH for USDC
+  }
+
   function test_swapInActive() public {
     (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
 
@@ -957,8 +1017,9 @@ contract MangroveVaultTest is Test {
     (uint256 baseAmountStart, uint256 quoteAmountStart) = vault.getUnderlyingBalances();
 
     vm.prank(owner);
+    vault.allowSwapContract(address(this));
 
-    // Check data
+    vm.prank(owner);
     vm.expectEmit(false, false, false, true, address(vault));
     emit MangroveVaultEvents.Swap(address(this), -1 ether, 3000e6, true);
     vault.swap(address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, 3000e6)), 1 ether, 0, true); // sell 1 WETH for USDC
@@ -967,9 +1028,82 @@ contract MangroveVaultTest is Test {
     assertEq(baseAmountEnd, baseAmountStart - 1 ether, "Base balance should be equal to baseAmountStart - 1 ether");
     assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
   }
-  // TODO: test swap in passive
-  // TODO: test swap in vaults
+
+  function test_swapInPassive() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Passive;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    (uint256 baseAmountStart, uint256 quoteAmountStart) = vault.getUnderlyingBalances();
+
+    vm.prank(owner);
+    vault.allowSwapContract(address(this));
+
+    vm.prank(owner);
+    vm.expectEmit(false, false, false, true, address(vault));
+    emit MangroveVaultEvents.Swap(address(this), -1 ether, 3000e6, true);
+    vault.swap(address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, 3000e6)), 1 ether, 0, true); // sell 1 WETH for USDC
+
+    (uint256 baseAmountEnd, uint256 quoteAmountEnd) = vault.getUnderlyingBalances();
+    assertEq(baseAmountEnd, baseAmountStart - 1 ether, "Base balance should be equal to baseAmountStart - 1 ether");
+    assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
+  }
+
+  function test_swapInVaults() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Vault;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vault.setPosition(position);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    (uint256 baseAmountStart, uint256 quoteAmountStart) = vault.getUnderlyingBalances();
+
+    vm.prank(owner);
+    vault.allowSwapContract(address(this));
+
+    vm.prank(owner);
+    vm.expectEmit(false, false, false, true, address(vault));
+    emit MangroveVaultEvents.Swap(address(this), -1 ether, 3000e6, true);
+    vault.swap(address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, 3000e6)), 1 ether, 0, true); // sell 1 WETH for USDC
+
+    (uint256 baseAmountEnd, uint256 quoteAmountEnd) = vault.getUnderlyingBalances();
+    assertEq(baseAmountEnd, baseAmountStart - 1 ether, "Base balance should be equal to baseAmountStart - 1 ether");
+    assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
+  }
+
   // TODO: test swap and set position
+  function test_swapAndSetPosition() public {
+    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+
+    KandelPosition memory position;
+    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+    position.tickOffset = 3;
+    position.fundsState = FundsState.Active;
+    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
+
+    vm.prank(owner);
+    vault.setPosition(position);
+  }
 
   // TODO: test aave
   function test_aave() public {

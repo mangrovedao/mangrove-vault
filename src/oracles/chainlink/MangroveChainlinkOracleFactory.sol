@@ -2,6 +2,14 @@
 pragma solidity ^0.8.20;
 
 import {MangroveChainlinkOracle} from "./MangroveChainlinkOracle.sol";
+import {MangroveVaultEvents} from "../../lib/MangroveVaultEvents.sol";
+/**
+ * @title ChainlinkFeed
+ * @notice Struct to hold Chainlink feed information
+ * @param feed Address of the Chainlink price feed
+ * @param baseDecimals Number of decimals for the base token
+ * @param quoteDecimals Number of decimals for the quote token
+ */
 
 struct ChainlinkFeed {
   address feed;
@@ -9,11 +17,25 @@ struct ChainlinkFeed {
   uint256 quoteDecimals;
 }
 
+/**
+ * @title MangroveChainlinkOracleFactory
+ * @notice Factory contract for creating MangroveChainlinkOracle instances
+ */
 contract MangroveChainlinkOracleFactory {
-  event OracleCreated(address creator, address oracle);
-
+  /**
+   * @notice Mapping to track if an address is a created oracle
+   */
   mapping(address => bool) public isOracle;
 
+  /**
+   * @notice Creates a new MangroveChainlinkOracle
+   * @param baseFeed1 ChainlinkFeed struct for the first base feed
+   * @param quoteFeed1 ChainlinkFeed struct for the first quote feed
+   * @param baseFeed2 ChainlinkFeed struct for the second base feed
+   * @param quoteFeed2 ChainlinkFeed struct for the second quote feed
+   * @param salt Unique value for deterministic address generation
+   * @return oracle The newly created MangroveChainlinkOracle
+   */
   function create(
     ChainlinkFeed memory baseFeed1,
     ChainlinkFeed memory quoteFeed1,
@@ -36,6 +58,6 @@ contract MangroveChainlinkOracleFactory {
       quoteFeed2.quoteDecimals
     );
     isOracle[address(oracle)] = true;
-    emit OracleCreated(msg.sender, address(oracle));
+    emit MangroveVaultEvents.OracleCreated(msg.sender, address(oracle));
   }
 }

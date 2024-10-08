@@ -4,22 +4,35 @@ pragma solidity ^0.8.20;
 import {AggregatorV3Interface} from "./AggregatorV3Interface.sol";
 import {MangroveVaultErrors} from "../../lib/MangroveVaultErrors.sol";
 import {TickLib, Tick} from "@mgv/lib/core/TickLib.sol";
-/// @title ChainlinkConsumer
-/// @notice A library for interacting with Chainlink price feeds
 
+/**
+ * @title ChainlinkConsumer
+ * @notice A library for interacting with Chainlink price feeds
+ */
 library ChainlinkConsumer {
-  /// @notice Get the latest price from a Chainlink price feed
-  /// @param _aggregator The Chainlink price feed aggregator
-  /// @return The latest price as a uint256
-  /// @dev If the aggregator address is zero, it returns 1 as a default value
-  /// @dev Reverts if the price is negative
+  /**
+   * @notice Get the latest price from a Chainlink price feed
+   * @param _aggregator The Chainlink price feed aggregator
+   * @return The latest price as a uint256
+   * @dev If the aggregator address is zero, it returns 1 as a default value
+   * @dev Reverts if the price is negative
+   */
   function getPrice(AggregatorV3Interface _aggregator) internal view returns (uint256) {
     if (address(_aggregator) == address(0)) return 1;
     (, int256 price,,,) = _aggregator.latestRoundData();
-    if (price < 0) revert MangroveVaultErrors.ChainlinkInvalidPrice();
+    if (price < 0) revert MangroveVaultErrors.OracleInvalidPrice();
     return uint256(price);
   }
 
+  /**
+   * @notice Calculate the tick value based on the price from Chainlink
+   * @param _aggregator The Chainlink price feed aggregator
+   * @param priceDecimals The number of decimals in the price feed
+   * @param baseDecimals The number of decimals in the base token
+   * @param quoteDecimals The number of decimals in the quote token
+   * @return The calculated tick value as an int256
+   * @dev Returns 0 if the aggregator address is zero (price is 1)
+   */
   function getTick(
     AggregatorV3Interface _aggregator,
     uint256 priceDecimals,
@@ -35,10 +48,12 @@ library ChainlinkConsumer {
     }
   }
 
-  /// @notice Get the number of decimals for a Chainlink price feed
-  /// @param _aggregator The Chainlink price feed aggregator
-  /// @return decimals The number of decimals used in the price feed
-  /// @dev Returns 0 if the aggregator address is zero
+  /**
+   * @notice Get the number of decimals for a Chainlink price feed
+   * @param _aggregator The Chainlink price feed aggregator
+   * @return decimals The number of decimals used in the price feed
+   * @dev Returns 0 if the aggregator address is zero
+   */
   function getDecimals(AggregatorV3Interface _aggregator) internal view returns (uint256 decimals) {
     if (address(_aggregator) != address(0)) decimals = _aggregator.decimals();
   }

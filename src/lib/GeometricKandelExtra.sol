@@ -7,6 +7,14 @@ import {OLKey, Local, IMangrove, Tick} from "@mgv/src/IMangrove.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {DistributionLib} from "./DistributionLib.sol";
 
+/**
+ * @notice Parameters for configuring the Kandel strategy
+ * @dev This struct is used to store and pass configuration parameters for the Kandel strategy
+ * @param gasprice The gas price for offer execution (if zero, stays unchanged or defaults to mangrove gasprice)
+ * @param gasreq The gas required for offer execution (if zero, stays unchanged or defaults to mangrove gasreq)
+ * @param stepSize The step size between offers
+ * @param pricePoints The number of price points in the distribution
+ */
 struct Params {
   uint32 gasprice;
   uint24 gasreq;
