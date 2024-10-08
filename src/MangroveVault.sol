@@ -177,6 +177,17 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     QUOTE_SCALE = 10 ** _decimalsOffset;
 
     _state.maxTotalInQuote = _initialParams.initialMaxTotalInQuote.toUint128();
+
+    if (_initialParams.performanceFee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
+      revert MangroveVaultErrors.MaxFeeExceeded(
+        MangroveVaultConstants.MAX_PERFORMANCE_FEE, _initialParams.performanceFee
+      );
+    }
+    if (_initialParams.managementFee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) {
+      revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_MANAGEMENT_FEE, _initialParams.managementFee);
+    }
+    if (_initialParams.feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
+
     _state.performanceFee = _initialParams.performanceFee.toUint16();
     _state.managementFee = _initialParams.managementFee.toUint16();
     _state.feeRecipient = _initialParams.feeRecipient;
@@ -197,7 +208,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @return quote The address of the quote token in the market
    * @return tickSpacing The tick spacing used in the market
    */
-  function market() public view returns (address base, address quote, uint256 tickSpacing) {
+  function market() external view returns (address base, address quote, uint256 tickSpacing) {
     return (BASE, QUOTE, TICK_SPACING);
   }
 
@@ -209,7 +220,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * * stepSize The step size for the Kandel position (It is the distance between an executed bid/ask and its dual offer).
    * * pricePoints The number of price points (offers) published by kandel (-1) (=> 3 price points will result in 2 live offers).
    */
-  function kandelParams() public view returns (Params memory params) {
+  function kandelParams() external view returns (Params memory params) {
     return kandel._params();
   }
 
@@ -219,7 +230,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @dev The tick offset is the tick difference between consecutive offers in the Kandel contract.
    * * Because a the price is 1.0001^tick, tick offset is the number of bips in price between consecutive offers.
    */
-  function kandelTickOffset() public view returns (uint256) {
+  function kandelTickOffset() external view returns (uint256) {
     return kandel.baseQuoteTickOffset();
   }
 
@@ -231,7 +242,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * - 2: Active - Funds are actively listed on Mangrove through the Kandel contract
    * @dev This function returns the funds state as a uint8 value (0-2) corresponding to the FundsState enum.
    */
-  function fundsState() public view returns (FundsState) {
+  function fundsState() external view returns (FundsState) {
     return _state.fundsState;
   }
 
@@ -239,7 +250,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @notice Retrieves the current tick at index 0 of the Kandel position.
    * @return The tick index as an int24 value.
    */
-  function tickIndex0() public view returns (int24) {
+  function tickIndex0() external view returns (int24) {
     return _state.tickIndex0;
   }
 
@@ -250,7 +261,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @return managementFee The current management fee percentage as a uint16
    * @return feeRecipient The address of the current fee recipient
    */
-  function feeData() public view returns (uint16 performanceFee, uint16 managementFee, address feeRecipient) {
+  function feeData() external view returns (uint16 performanceFee, uint16 managementFee, address feeRecipient) {
     return (_state.performanceFee, _state.managementFee, _state.feeRecipient);
   }
 
@@ -258,7 +269,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @notice Gets the timestamp of the last fee accrual or relevant state update.
    * @return The last timestamp as a uint32 value.
    */
-  function lastTimestamp() public view returns (uint32) {
+  function lastTimestamp() external view returns (uint32) {
     return _state.lastTimestamp;
   }
 
@@ -266,7 +277,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @notice Gets the current tick of the Kandel position.
    * @return The current tick
    */
-  function currentTick() public view returns (Tick) {
+  function currentTick() external view returns (Tick) {
     return _currentTick();
   }
 
