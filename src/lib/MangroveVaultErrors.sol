@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 library MangroveVaultErrors {
-
   error ZeroAddress();
 
   error NoUnderlyingBalance();
@@ -11,7 +10,7 @@ library MangroveVaultErrors {
 
   error IncorrectSlippage();
 
-  error InitialMintAmountMismatch(uint expected);
+  error InitialMintAmountMismatch(uint256 expected);
 
   error ImpossibleMint();
 

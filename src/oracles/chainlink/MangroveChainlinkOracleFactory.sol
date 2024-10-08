@@ -10,7 +10,6 @@ struct ChainlinkFeed {
 }
 
 contract MangroveChainlinkOracleFactory {
-
   event OracleCreated(address creator, address oracle);
 
   mapping(address => bool) public isOracle;

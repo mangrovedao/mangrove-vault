@@ -3,12 +3,12 @@ pragma solidity ^0.8.20;
 
 library MangroveVaultConstants {
   /// @notice The precision of the performance fee.
-  uint internal constant PERFORMANCE_FEE_PRECISION = 1e5;
+  uint256 internal constant PERFORMANCE_FEE_PRECISION = 1e5;
   /// @notice The maximum performance fee.
   uint16 internal constant MAX_PERFORMANCE_FEE = 5e4;
 
   /// @notice The precision of the management fee.
-  uint internal constant MANAGEMENT_FEE_PRECISION = 1e5 * 365 days;
+  uint256 internal constant MANAGEMENT_FEE_PRECISION = 1e5 * 365 days;
   /// @notice The maximum management fee.
   uint16 internal constant MAX_MANAGEMENT_FEE = 5e3;
 
