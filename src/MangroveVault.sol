@@ -46,23 +46,6 @@ enum FundsState {
 }
 
 /**
- * @notice Struct containing initial parameters for the vault
- * @dev This struct is used during the initialization of the vault
- * @param initialMaxTotalInQuote The initial maximum total value in quote token
- * @param performanceFee The performance fee percentage
- * @param managementFee The management fee percentage
- * @param owner The address of the vault owner
- * @param feeRecipient The address of the fee recipient
- */
-struct InitialParams {
-  uint256 initialMaxTotalInQuote;
-  uint256 performanceFee;
-  uint256 managementFee;
-  address owner;
-  address feeRecipient;
-}
-
-/**
  * @notice Struct representing the Kandel position configuration
  * @dev This struct is used to set and update the Kandel strategy parameters
  * @param tickIndex0 The tick index for the first price point
@@ -91,7 +74,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   GeometricKandel public immutable kandel;
 
   /// @notice The AbstractKandelSeeder contract instance used to initialize the Kandel contract.
-  AbstractKandelSeeder public immutable seeder;
+  AbstractKandelSeeder public seeder;
 
   /// @notice The Mangrove deployment.
   IMangrove public immutable MGV;
@@ -109,7 +92,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   uint256 internal immutable QUOTE_SCALE;
 
   /// @notice The number of decimals of the LP token.
-  uint8 internal immutable DECIMALS;
+  uint8 internal DECIMALS;
 
   /// @notice The oracle used to get the price of the token pair.
   IOracle public immutable oracle;
@@ -149,7 +132,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @param _BASE The address of the first token in the token pair.
    * @param _QUOTE The address of the second token in the token pair.
    * @param _tickSpacing The spacing between ticks on the Mangrove market.
-   * @param _decimalsOffset The number of decimals to add to the quote token decimals.
+   * @param _decimals The number of decimals of the LP token.
    * @param _oracle The address of the oracle used to get the price of the token pair.
    * @param name The name of the ERC20 token, chosen to represent the Mangrove market and eventually the vault manager.
    * @param symbol The symbol of the ERC20 token, chosen to represent the Mangrove market and eventually the vault manager.
@@ -159,39 +142,28 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     address _BASE,
     address _QUOTE,
     uint256 _tickSpacing,
-    uint256 _decimalsOffset,
+    uint8 _decimals,
     string memory name,
     string memory symbol,
     address _oracle,
-    InitialParams memory _initialParams
-  ) Ownable(_initialParams.owner) ERC20(name, symbol) ERC20Permit(name) {
+    address _owner
+  ) Ownable(_owner) ERC20(name, symbol) ERC20Permit(name) {
     seeder = _seeder;
     TICK_SPACING = _tickSpacing;
     MGV = _seeder.MGV();
-    (BASE, QUOTE) = _BASE < _QUOTE ? (_BASE, _QUOTE) : (_QUOTE, _BASE);
-    kandel = _seeder.sow(OLKey(BASE, QUOTE, _tickSpacing), false);
+    BASE = _BASE;
+    QUOTE = _QUOTE;
+    kandel = _seeder.sow(OLKey(_BASE, _QUOTE, _tickSpacing), false);
     oracle = IOracle(_oracle);
-    DECIMALS = (ERC20(QUOTE).decimals() + _decimalsOffset).toUint8();
-    QUOTE_SCALE = 10 ** _decimalsOffset;
+    uint8 offset = _decimals - ERC20(_QUOTE).decimals();
+    DECIMALS = _decimals;
+    QUOTE_SCALE = 10 ** offset; // offset should not be larger than 19 decimals
 
-    _state.maxTotalInQuote = _initialParams.initialMaxTotalInQuote.toUint128();
+    _state.maxTotalInQuote = type(uint128).max;
     emit MangroveVaultEvents.SetMaxTotalInQuote(_state.maxTotalInQuote);
 
-    if (_initialParams.performanceFee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
-      revert MangroveVaultErrors.MaxFeeExceeded(
-        MangroveVaultConstants.MAX_PERFORMANCE_FEE, _initialParams.performanceFee
-      );
-    }
-    if (_initialParams.managementFee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) {
-      revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_MANAGEMENT_FEE, _initialParams.managementFee);
-    }
-    if (_initialParams.feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
-
-    _state.performanceFee = _initialParams.performanceFee.toUint16();
-    _state.managementFee = _initialParams.managementFee.toUint16();
-    _state.feeRecipient = _initialParams.feeRecipient;
-    _state.lastTimestamp = block.timestamp.toUint32();
-    emit MangroveVaultEvents.SetFeeData(_state.performanceFee, _state.managementFee, _state.feeRecipient);
+    _state.feeRecipient = _owner;
+    emit MangroveVaultEvents.SetFeeData(0, 0, _owner);
   }
 
   /**
@@ -787,6 +759,13 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _unpause();
   }
 
+  /**
+   * @notice Sets the fee data for the vault
+   * @dev This function can only be called by the owner of the contract
+   * @param performanceFee The performance fee to be set
+   * @param managementFee The management fee to be set
+   * @param feeRecipient The address to receive the fees
+   */
   function setFeeData(uint256 performanceFee, uint256 managementFee, address feeRecipient) external onlyOwner {
     if (performanceFee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_PERFORMANCE_FEE, performanceFee);

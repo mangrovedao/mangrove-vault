@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
-import {MangroveVault, Tick, InitialParams, KandelPosition, FundsState, Params} from "../src/MangroveVault.sol";
+import {MangroveVault, Tick, KandelPosition, FundsState, Params} from "../src/MangroveVault.sol";
 import {IMangrove, OLKey, Local} from "@mgv/src/IMangrove.sol";
 import {Mangrove} from "@mgv/src/core/Mangrove.sol";
 import {MgvReader, Market} from "@mgv/src/periphery/MgvReader.sol";
@@ -222,31 +222,21 @@ contract MangroveVaultTest is Test {
   {
     _market = markets()[market];
 
-    InitialParams memory params = InitialParams({
-      initialMaxTotalInQuote: type(uint128).max,
-      performanceFee: 5e3, // 5%
-      managementFee: 1e3, // 1%
-      feeRecipient: feeRecipient,
-      owner: owner
-    });
-
-    OLKey memory olKey = OLKey(address(_market.base), address(_market.quote), 1);
-
     vm.startPrank(owner);
-    vm.expectEmit(true, true, true, false);
+    vm.expectEmit(true, false, false, false, address(factory));
     emit MangroveVaultEvents.VaultCreated(
-      address(seeder), olKey.hash(), olKey.flipped().hash(), address(0), address(0), address(0)
+      address(seeder), address(_market.base), address(_market.quote), 1, address(0), address(0), address(0)
     );
     vault = factory.createVault(
       seeder,
       address(_market.base),
       address(_market.quote),
       1,
-      18 - _market.quote.decimals(),
+      18,
       "Mangrove Vault",
       "MGVv",
       address(_market.oracle),
-      params
+      owner
     );
     vm.stopPrank();
     kandel = address(vault.kandel());

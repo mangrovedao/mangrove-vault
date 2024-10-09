@@ -13,14 +13,15 @@ library MangroveVaultEvents {
   /**
    * @notice Emitted when a new vault is created
    * @param seeder Address of the account that created the vault
-   * @param olKey Offer list key for the outbound-inbound market
-   * @param loKey Offer list key for the inbound-outbound market
+   * @param BASE Address of the base token
+   * @param QUOTE Address of the quote token
+   * @param tickSpacing Tick spacing for the market
    * @param vault Address of the newly created vault
    * @param oracle Address of the oracle used by the vault
    * @param kandel Address of the Kandel strategy associated with the vault
    */
   event VaultCreated(
-    address indexed seeder, bytes32 indexed olKey, bytes32 indexed loKey, address vault, address oracle, address kandel
+    address indexed seeder, address BASE, address QUOTE, uint256 tickSpacing, address vault, address oracle, address kandel
   );
 
   /**
