@@ -95,6 +95,20 @@ library MangroveVaultEvents {
   event UpdateLastTotalInQuote(uint256 lastTotalInQuote, uint256 timestamp);
 
   /**
+   * @notice Emitted when the fee data is set
+   * @param performanceFee Performance fee
+   * @param managementFee Management fee
+   * @param feeRecipient Fee recipient
+   */
+  event SetFeeData(uint256 performanceFee, uint256 managementFee, address feeRecipient);
+
+  /**
+   * @notice Emitted when the maximum total value in quote token is set
+   * @param maxTotalInQuote Maximum total value in quote token
+   */
+  event SetMaxTotalInQuote(uint256 maxTotalInQuote);
+
+  /**
    * @notice Emitted when a new oracle is created
    * @param creator Address of the account that created the oracle
    * @param oracle Address of the newly created oracle

@@ -209,13 +209,16 @@ contract MangroveVaultTest is Test {
     });
   }
 
-  function deployVault(uint8 market) internal returns (MangroveVault vault, MarketWOracle memory _market) {
+  function deployVault(uint8 market)
+    internal
+    returns (MangroveVault vault, MarketWOracle memory _market, address kandel)
+  {
     return deployVault(market, kandelSeeder);
   }
 
   function deployVault(uint8 market, AbstractKandelSeeder seeder)
     internal
-    returns (MangroveVault vault, MarketWOracle memory _market)
+    returns (MangroveVault vault, MarketWOracle memory _market, address kandel)
   {
     _market = markets()[market];
 
@@ -246,6 +249,7 @@ contract MangroveVaultTest is Test {
       params
     );
     vm.stopPrank();
+    kandel = address(vault.kandel());
   }
 
   function mintWithSpecifiedQuoteAmount(MangroveVault vault, MarketWOracle memory _market, uint256 quoteAmount)
@@ -296,7 +300,7 @@ contract MangroveVaultTest is Test {
   function testFuzz_initialMintAmountMatch(uint8 market, uint128 quote) public {
     vm.assume(quote > MangroveVaultConstants.MINIMUM_LIQUIDITY);
     vm.assume(market < markets().length);
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(market);
     vm.assume(quote < _market.maxQuote);
 
     // do the initial mint
@@ -347,7 +351,7 @@ contract MangroveVaultTest is Test {
     vm.assume(quoteInitial > MangroveVaultConstants.MINIMUM_LIQUIDITY);
     vm.assume(quoteSecond > MangroveVaultConstants.MINIMUM_LIQUIDITY);
     vm.assume(market < markets().length);
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(market);
     vm.assume(quoteInitial < _market.maxQuote);
     vm.assume(quoteSecond < _market.maxQuote);
 
@@ -377,7 +381,7 @@ contract MangroveVaultTest is Test {
   function testFuzz_burnShares(uint8 market, uint128 quoteInitial, uint16 burnProportion) public {
     vm.assume(market < markets().length);
     vm.assume(burnProportion > 0 && burnProportion <= BURN_PRECISION);
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(market);
     vm.assume(quoteInitial >= BURN_PRECISION && quoteInitial < _market.maxQuote);
 
     (,, uint256 shares) = mintWithSpecifiedQuoteAmount(vault, _market, quoteInitial);
@@ -428,7 +432,7 @@ contract MangroveVaultTest is Test {
   {
     vm.assume(quote > MangroveVaultConstants.MINIMUM_LIQUIDITY);
     vm.assume(market < markets().length);
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(market);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(market);
     vm.assume(quote < _market.maxQuote);
 
     PerformanceFeesTestHeap memory heap;
@@ -495,7 +499,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_auth() public {
-    (MangroveVault vault,) = deployVault(0);
+    (MangroveVault vault,,) = deployVault(0);
 
     vm.startPrank(user);
 
@@ -530,19 +534,13 @@ contract MangroveVaultTest is Test {
     vault.unpause();
 
     vm.expectRevert(revertMsg);
-    vault.setPerformanceFee(0);
-
-    vm.expectRevert(revertMsg);
-    vault.setManagementFee(0);
-
-    vm.expectRevert(revertMsg);
-    vault.setFeeRecipient(address(0));
+    vault.setFeeData(0, 0, address(0));
 
     vm.stopPrank();
   }
 
   function test_setPosition() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     (uint256 baseAmountOut, uint256 quoteAmountOut,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
 
@@ -553,9 +551,7 @@ contract MangroveVaultTest is Test {
     position.tickOffset = 3;
     position.fundsState = FundsState.Active;
     position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
-
-    address kandel = address(vault.kandel());
-
+      
     vm.prank(owner);
     vm.expectEmit(false, false, false, true, kandel);
     emit GeometricKandel.SetBaseQuoteTickOffset(position.tickOffset);
@@ -567,8 +563,8 @@ contract MangroveVaultTest is Test {
     MangroveVaultEvents.emitSetKandelPosition(position);
     vault.setPosition(position);
 
-    uint256 offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
-    uint256 offeredQuote = vault.kandel().offeredVolume(OfferType.Bid);
+    uint256 offeredBase = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    uint256 offeredQuote = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
 
     // delta is 10 due to the number of price points (floor rounding each offer amount)
 
@@ -577,8 +573,8 @@ contract MangroveVaultTest is Test {
 
     (uint256 baseAmountOut2, uint256 quoteAmountOut2,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6);
 
-    offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
-    offeredQuote = vault.kandel().offeredVolume(OfferType.Bid);
+    offeredBase = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    offeredQuote = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
 
     assertApproxEqAbs(
       offeredBase, baseAmountOut + baseAmountOut2, 10, "Offered base should be equal to baseAmountOut + baseAmountOut2"
@@ -606,10 +602,9 @@ contract MangroveVaultTest is Test {
   }
 
   function test_denssityTooLow() public {
-    (MangroveVault vault,) = deployVault(0);
+    (MangroveVault vault, , address kandel) = deployVault(0);
 
     Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
-    address kandel = address(vault.kandel());
 
     vm.prank(owner);
     vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 0);
@@ -625,10 +620,9 @@ contract MangroveVaultTest is Test {
   }
 
   function test_NoFunds() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
-    address kandel = address(vault.kandel());
 
     // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
     mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
@@ -647,10 +641,9 @@ contract MangroveVaultTest is Test {
   }
 
   function test_DensityAndFunds() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
-    address kandel = address(vault.kandel());
 
     (uint256 baseAmountOut, uint256 quoteAmountOut,) = mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
 
@@ -667,15 +660,15 @@ contract MangroveVaultTest is Test {
     vm.expectCall(kandel, abi.encodeWithSelector(DirectWithBidsAndAsksDistribution.retractOffers.selector), 0);
     vault.setPosition(position);
 
-    uint256 offeredBase = vault.kandel().offeredVolume(OfferType.Ask);
-    uint256 offeredQuote = vault.kandel().offeredVolume(OfferType.Bid);
+    uint256 offeredBase = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    uint256 offeredQuote = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
 
     assertApproxEqAbs(offeredBase, baseAmountOut, 10, "Offered base should be equal to baseAmountOut");
     assertApproxEqAbs(offeredQuote, quoteAmountOut, 10, "Offered quote should be equal to quoteAmountOut");
   }
 
   function test_PassivefundState() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -703,22 +696,20 @@ contract MangroveVaultTest is Test {
     assertEq(baseBalance, 0, "Base balance should not be in vault");
     assertEq(quoteBalance, 0, "Quote balance should not be in vault");
 
-    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
-    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    baseBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    quoteBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
     assertEq(baseBalance, 0, "No offers should be made");
     assertEq(quoteBalance, 0, "No offers should be made");
   }
 
   function test_BurningInActive() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
     position.tickOffset = 3;
     position.fundsState = FundsState.Active;
     position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
-
-    address kandel = address(vault.kandel());
 
     vault.fundMangrove{value: 1 ether}();
 
@@ -743,8 +734,8 @@ contract MangroveVaultTest is Test {
     assertEq(baseBalance, 0, "Base balance should not be in vault");
     assertEq(quoteBalance, 0, "Quote balance should not be in vault");
 
-    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
-    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    baseBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    quoteBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
     assertApproxEqAbs(baseBalance, baseAmountOut, 10, "Offered base should be equal to baseAmountOut");
     assertApproxEqAbs(quoteBalance, quoteAmountOut, 10, "Offered quote should be equal to quoteAmountOut");
 
@@ -789,8 +780,8 @@ contract MangroveVaultTest is Test {
     assertEq(baseBalance, 0, "Base balance should not be in vault");
     assertEq(quoteBalance, 0, "Quote balance should not be in vault");
 
-    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
-    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    baseBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    quoteBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
     assertApproxEqAbs(
       baseBalance,
       baseAmountOut - baseAmountReceived,
@@ -841,14 +832,14 @@ contract MangroveVaultTest is Test {
     assertEq(baseBalance, 0, "Base balance should not be in vault");
     assertEq(quoteBalance, 0, "Quote balance should not be in vault");
 
-    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
-    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    baseBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    quoteBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
     assertEq(baseBalance, 0, "No offers should be made");
     assertEq(quoteBalance, 0, "No offers should be made");
   }
 
   function test_BurningInPassive() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -877,8 +868,8 @@ contract MangroveVaultTest is Test {
     assertEq(baseBalance, 0, "Base balance should not be in vault");
     assertEq(quoteBalance, 0, "Quote balance should not be in vault");
 
-    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
-    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    baseBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    quoteBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
     assertEq(baseBalance, 0, "No offers should be made");
     assertEq(quoteBalance, 0, "No offers should be made");
 
@@ -917,8 +908,8 @@ contract MangroveVaultTest is Test {
     assertEq(baseBalance, 0, "Base balance should not be in vault");
     assertEq(quoteBalance, 0, "Quote balance should not be in vault");
 
-    baseBalance = vault.kandel().offeredVolume(OfferType.Ask);
-    quoteBalance = vault.kandel().offeredVolume(OfferType.Bid);
+    baseBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Ask);
+    quoteBalance = GeometricKandel(payable(kandel)).offeredVolume(OfferType.Bid);
     assertEq(baseBalance, 0, "No offers should be made");
     assertEq(quoteBalance, 0, "No offers should be made");
   }
@@ -941,15 +932,13 @@ contract MangroveVaultTest is Test {
   }
 
   function test_setUnauthorizedSwapContract() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
     position.tickOffset = 3;
     position.fundsState = FundsState.Active;
     position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
-
-    address kandel = address(vault.kandel());
 
     vault.fundMangrove{value: 1 ether}();
 
@@ -972,7 +961,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_unauthorizedSwapContract() public {
-    (MangroveVault vault,) = deployVault(0);
+    (MangroveVault vault,,) = deployVault(0);
 
     vm.prank(owner);
     vault.allowSwapContract(address(this));
@@ -990,7 +979,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_swapIncorrectSlippage() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -1014,7 +1003,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_swapInActive() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -1045,7 +1034,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_swapInPassive() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -1076,7 +1065,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_swapInVaults() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, ) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -1107,7 +1096,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_swapAndSetPosition() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -1116,8 +1105,6 @@ contract MangroveVaultTest is Test {
     position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
 
     vault.fundMangrove{value: 1 ether}();
-
-    address kandel = address(vault.kandel());
 
     vm.prank(owner);
     vault.setPosition(position);
@@ -1151,7 +1138,7 @@ contract MangroveVaultTest is Test {
 
   // TODO: test aave
   function test_aave() public {
-    (MangroveVault vault, MarketWOracle memory _market) = deployVault(0, aaveKandelSeeder);
+    (MangroveVault vault, MarketWOracle memory _market, ) = deployVault(0, aaveKandelSeeder);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);

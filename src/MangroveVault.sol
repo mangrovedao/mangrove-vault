@@ -88,7 +88,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
   using MangroveLib for IMangrove;
   /// @notice The GeometricKandel contract instance used for market making.
 
-  GeometricKandel public kandel;
+  GeometricKandel public immutable kandel;
 
   /// @notice The AbstractKandelSeeder contract instance used to initialize the Kandel contract.
   AbstractKandelSeeder public immutable seeder;
@@ -175,6 +175,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     QUOTE_SCALE = 10 ** _decimalsOffset;
 
     _state.maxTotalInQuote = _initialParams.initialMaxTotalInQuote.toUint128();
+    emit MangroveVaultEvents.SetMaxTotalInQuote(_state.maxTotalInQuote);
 
     if (_initialParams.performanceFee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(
@@ -190,6 +191,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _state.managementFee = _initialParams.managementFee.toUint16();
     _state.feeRecipient = _initialParams.feeRecipient;
     _state.lastTimestamp = block.timestamp.toUint32();
+    emit MangroveVaultEvents.SetFeeData(_state.performanceFee, _state.managementFee, _state.feeRecipient);
   }
 
   /**
@@ -648,6 +650,8 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _updatePosition();
   }
 
+  receive() external payable {}
+
   // admin functions
 
   /**
@@ -783,48 +787,31 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     _unpause();
   }
 
-  /**
-   * @notice Sets the performance fee for the vault
-   * @dev This function can only be called by the owner of the contract
-   * @param _fee The new performance fee to be set
-   */
-  function setPerformanceFee(uint256 _fee) external onlyOwner {
-    if (_fee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
-      revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_PERFORMANCE_FEE, _fee);
+  function setFeeData(uint256 performanceFee, uint256 managementFee, address feeRecipient) external onlyOwner {
+    if (performanceFee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
+      revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_PERFORMANCE_FEE, performanceFee);
     }
-    (uint256 totalInQuote,) = _accrueFee();
-    _updateLastTotalInQuote(totalInQuote);
-    _state.performanceFee = _fee.toUint16();
-  }
-
-  /**
-   * @notice Sets the management fee for the vault
-   * @dev This function can only be called by the owner of the contract
-   * @param _fee The new management fee to be set
-   */
-  function setManagementFee(uint256 _fee) external onlyOwner {
-    if (_fee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) {
-      revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_MANAGEMENT_FEE, _fee);
+    if (managementFee > MangroveVaultConstants.MAX_MANAGEMENT_FEE) {
+      revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_MANAGEMENT_FEE, managementFee);
     }
+    if (feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
     (uint256 totalInQuote,) = _accrueFee();
     _updateLastTotalInQuote(totalInQuote);
-    _state.managementFee = _fee.toUint16();
+    _state.performanceFee = performanceFee.toUint16();
+    _state.managementFee = managementFee.toUint16();
+    _state.feeRecipient = feeRecipient;
+    emit MangroveVaultEvents.SetFeeData(performanceFee, managementFee, feeRecipient);
   }
 
   /**
-   * @notice Sets the fee recipient for the vault
+   * @notice Sets the maximum total value in quote token
    * @dev This function can only be called by the owner of the contract
-   * @param _feeRecipient The address of the new fee recipient
+   * @dev This is limited by 128 bits
+   * @param maxTotalInQuote The new maximum total value in quote token
    */
-  function setFeeRecipient(address _feeRecipient) external onlyOwner {
-    if (_feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
-    (uint256 totalInQuote,) = _accrueFee();
-    _updateLastTotalInQuote(totalInQuote);
-    _state.feeRecipient = _feeRecipient;
-  }
-
-  receive() external payable {
-    _fundMangrove();
+  function setMaxTotalInQuote(uint128 maxTotalInQuote) external onlyOwner {
+    _state.maxTotalInQuote = maxTotalInQuote;
+    emit MangroveVaultEvents.SetMaxTotalInQuote(maxTotalInQuote);
   }
 
   /**
