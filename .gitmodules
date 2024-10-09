@@ -7,6 +7,3 @@
 [submodule "lib/mangrove-core"]
 	path = lib/mangrove-core
 	url = https://github.com/mangrovedao/mangrove-core
-[submodule "lib/openzeppelin-contracts"]
-	path = lib/openzeppelin-contracts
-	url = https://github.com/OpenZeppelin/openzeppelin-contracts
