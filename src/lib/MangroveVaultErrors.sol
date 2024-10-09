@@ -14,12 +14,6 @@ library MangroveVaultErrors {
   error ZeroAddress();
 
   /**
-   * @notice Thrown when attempting to mint shares with no underlying tokens in the vault
-   * @dev This occurs in the getMintAmounts function in MangroveVault.sol when both base and quote balances are zero
-   */
-  error NoUnderlyingTokens();
-
-  /**
    * @notice Thrown when attempting to perform an operation with a zero amount
    * @dev This can occur in mint and burn functions in MangroveVault.sol when the amount is zero
    */

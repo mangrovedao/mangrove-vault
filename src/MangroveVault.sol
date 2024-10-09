@@ -14,7 +14,6 @@ import {GeometricKandel} from "@mgv-strats/src/strategies/offer_maker/market_mak
 // OpenZeppelin
 import {Address} from "@openzeppelin/contracts/utils/Address.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -60,7 +59,7 @@ struct KandelPosition {
   FundsState fundsState;
 }
 
-contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard {
+contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   using SafeERC20 for IERC20;
   using Address for address;
   using SafeCast for uint256;
@@ -147,7 +146,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     string memory symbol,
     address _oracle,
     address _owner
-  ) Ownable(_owner) ERC20(name, symbol) ERC20Permit(name) {
+  ) Ownable(_owner) ERC20(name, symbol) {
     seeder = _seeder;
     TICK_SPACING = _tickSpacing;
     MGV = _seeder.MGV();
@@ -330,17 +329,11 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
       (uint256 baseAmount, uint256 quoteAmount) = getUnderlyingBalances();
 
       // Calculate shares based on the available balances
-      if (baseAmount == 0 && quoteAmount != 0) {
-        shares = Math.mulDiv(quoteAmountMax, _totalSupply, quoteAmount);
-      } else if (baseAmount != 0 && quoteAmount == 0) {
-        shares = Math.mulDiv(baseAmountMax, _totalSupply, baseAmount);
-      } else if (baseAmount == 0 && quoteAmount == 0) {
-        revert MangroveVaultErrors.NoUnderlyingTokens();
-      } else {
-        shares = Math.min(
-          Math.mulDiv(baseAmountMax, _totalSupply, baseAmount), Math.mulDiv(quoteAmountMax, _totalSupply, quoteAmount)
-        );
-      }
+
+      uint256 baseShares = baseAmount != 0 ? baseAmountMax.mulDiv(_totalSupply, baseAmount) : 0;
+      uint256 quoteShares = quoteAmount != 0 ? quoteAmountMax.mulDiv(_totalSupply, quoteAmount) : 0;
+
+      shares = Math.min(baseShares, quoteShares);
 
       // Revert if no shares can be minted
       if (shares == 0) {
@@ -576,9 +569,10 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     (heap.kandelBalanceBase, heap.kandelBalanceQuote) = getKandelBalances();
 
     // Calculate the user's share of the underlying assets
-    heap.underlyingBalanceBase = Math.mulDiv(shares, heap.vaultBalanceBase + heap.kandelBalanceBase, heap.totalSupply);
+    heap.underlyingBalanceBase =
+      Math.mulDiv(shares, heap.vaultBalanceBase + heap.kandelBalanceBase, heap.totalSupply, Math.Rounding.Floor);
     heap.underlyingBalanceQuote =
-      Math.mulDiv(shares, heap.vaultBalanceQuote + heap.kandelBalanceQuote, heap.totalSupply);
+      Math.mulDiv(shares, heap.vaultBalanceQuote + heap.kandelBalanceQuote, heap.totalSupply, Math.Rounding.Floor);
 
     // Check if the base withdrawal amount meets the minimum requirement (slippage protection)
     if (heap.underlyingBalanceBase < minAmountBaseOut) {
@@ -745,18 +739,15 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
 
   /**
    * @notice Pauses the vault operations
+   * @param pause_ If true, the vault will be paused; if false, the vault will be unpaused
    * @dev This function can only be called by the owner of the contract
    */
-  function pause() external onlyOwner {
-    _pause();
-  }
-
-  /**
-   * @notice Unpauses the vault operations
-   * @dev This function can only be called by the owner of the contract
-   */
-  function unpause() external onlyOwner {
-    _unpause();
+  function pause(bool pause_) external onlyOwner {
+    if (pause_) {
+      _pause();
+    } else {
+      _unpause();
+    }
   }
 
   /**
@@ -766,7 +757,7 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
    * @param managementFee The management fee to be set
    * @param feeRecipient The address to receive the fees
    */
-  function setFeeData(uint256 performanceFee, uint256 managementFee, address feeRecipient) external onlyOwner {
+  function setFeeData(uint16 performanceFee, uint16 managementFee, address feeRecipient) external onlyOwner {
     if (performanceFee > MangroveVaultConstants.MAX_PERFORMANCE_FEE) {
       revert MangroveVaultErrors.MaxFeeExceeded(MangroveVaultConstants.MAX_PERFORMANCE_FEE, performanceFee);
     }
@@ -776,8 +767,8 @@ contract MangroveVault is Ownable, ERC20, ERC20Permit, Pausable, ReentrancyGuard
     if (feeRecipient == address(0)) revert MangroveVaultErrors.ZeroAddress();
     (uint256 totalInQuote,) = _accrueFee();
     _updateLastTotalInQuote(totalInQuote);
-    _state.performanceFee = performanceFee.toUint16();
-    _state.managementFee = managementFee.toUint16();
+    _state.performanceFee = performanceFee;
+    _state.managementFee = managementFee;
     _state.feeRecipient = feeRecipient;
     emit MangroveVaultEvents.SetFeeData(performanceFee, managementFee, feeRecipient);
   }

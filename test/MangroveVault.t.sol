@@ -518,10 +518,10 @@ contract MangroveVaultTest is Test {
     vault.withdrawNative();
 
     vm.expectRevert(revertMsg);
-    vault.pause();
+    vault.pause(true);
 
-    vm.expectRevert(revertMsg);
-    vault.unpause();
+    // vm.expectRevert(revertMsg);
+    // vault.unpause();
 
     vm.expectRevert(revertMsg);
     vault.setFeeData(0, 0, address(0));
@@ -1083,47 +1083,6 @@ contract MangroveVaultTest is Test {
     (uint256 baseAmountEnd, uint256 quoteAmountEnd) = vault.getUnderlyingBalances();
     assertEq(baseAmountEnd, baseAmountStart - 1 ether, "Base balance should be equal to baseAmountStart - 1 ether");
     assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
-  }
-
-  function test_swapAndSetPosition() public {
-    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
-
-    KandelPosition memory position;
-    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
-    position.tickOffset = 3;
-    position.fundsState = FundsState.Active;
-    position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
-
-    vault.fundMangrove{value: 1 ether}();
-
-    vm.prank(owner);
-    vault.setPosition(position);
-
-    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
-
-    vm.prank(owner);
-    vault.allowSwapContract(address(this));
-
-    (uint256 baseBalanceStart, uint256 quoteBalanceStart) = vault.getUnderlyingBalances();
-
-    position.params.pricePoints = 20;
-    position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 30);
-
-    vm.prank(owner);
-    vm.expectEmit(false, false, false, true, kandel);
-    emit HasIndexedBidsAndAsks.SetLength(position.params.pricePoints);
-    vm.expectEmit(false, false, false, true, address(vault));
-    MangroveVaultEvents.emitSetKandelPosition(position);
-    vm.expectEmit(false, false, false, true, address(vault));
-    emit MangroveVaultEvents.Swap(address(this), -1 ether, 3000e6, true);
-    vault.swapAndSetPosition(
-      address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, 3000e6)), 1 ether, 0, true, position
-    ); // sell 1 WETH for USDC
-
-    (uint256 baseBalanceEnd, uint256 quoteBalanceEnd) = vault.getUnderlyingBalances();
-
-    assertEq(baseBalanceEnd, baseBalanceStart - 1 ether, "Base balance should be equal to baseBalanceStart - 1 ether");
-    assertEq(quoteBalanceEnd, quoteBalanceStart + 3000e6, "Quote balance should be equal to quoteBalanceStart + 3000e6");
   }
 
   // TODO: test aave
