@@ -541,7 +541,7 @@ contract MangroveVaultTest is Test {
     position.tickOffset = 3;
     position.fundsState = FundsState.Active;
     position.params = Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10});
-      
+
     vm.prank(owner);
     vm.expectEmit(false, false, false, true, kandel);
     emit GeometricKandel.SetBaseQuoteTickOffset(position.tickOffset);
@@ -592,7 +592,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_denssityTooLow() public {
-    (MangroveVault vault, , address kandel) = deployVault(0);
+    (MangroveVault vault,, address kandel) = deployVault(0);
 
     Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
 
@@ -1055,7 +1055,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_swapInVaults() public {
-    (MangroveVault vault, MarketWOracle memory _market, ) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
@@ -1128,7 +1128,7 @@ contract MangroveVaultTest is Test {
 
   // TODO: test aave
   function test_aave() public {
-    (MangroveVault vault, MarketWOracle memory _market, ) = deployVault(0, aaveKandelSeeder);
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0, aaveKandelSeeder);
 
     KandelPosition memory position;
     position.tickIndex0 = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);

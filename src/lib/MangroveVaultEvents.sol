@@ -21,7 +21,13 @@ library MangroveVaultEvents {
    * @param kandel Address of the Kandel strategy associated with the vault
    */
   event VaultCreated(
-    address indexed seeder, address BASE, address QUOTE, uint256 tickSpacing, address vault, address oracle, address kandel
+    address indexed seeder,
+    address BASE,
+    address QUOTE,
+    uint256 tickSpacing,
+    address vault,
+    address oracle,
+    address kandel
   );
 
   /**
