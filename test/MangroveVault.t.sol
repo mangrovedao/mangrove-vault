@@ -1092,8 +1092,6 @@ contract MangroveVaultTest is Test {
     assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
   }
 
-  // TODO: test first ask index
-
   function test_aave() public {
     (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0, aaveKandelSeeder);
 
