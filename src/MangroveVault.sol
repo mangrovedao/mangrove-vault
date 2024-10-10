@@ -330,11 +330,14 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
       (uint256 baseAmount, uint256 quoteAmount) = getUnderlyingBalances();
 
       // Calculate shares based on the available balances
-
-      uint256 baseShares = baseAmount != 0 ? baseAmountMax.mulDiv(_totalSupply, baseAmount) : 0;
-      uint256 quoteShares = quoteAmount != 0 ? quoteAmountMax.mulDiv(_totalSupply, quoteAmount) : 0;
-
-      shares = Math.min(baseShares, quoteShares);
+      if (baseAmount == 0 && quoteAmount != 0) {
+        shares = quoteAmountMax.mulDiv(_totalSupply, quoteAmount);
+      } else if (baseAmount != 0 && quoteAmount == 0) {
+        shares = baseAmountMax.mulDiv(_totalSupply, baseAmount);
+      } else if (baseAmount != 0 && quoteAmount != 0) {
+        shares =
+          Math.min(baseAmountMax.mulDiv(_totalSupply, baseAmount), quoteAmountMax.mulDiv(_totalSupply, quoteAmount));
+      }
 
       // Revert if no shares can be minted
       if (shares == 0) {
@@ -342,8 +345,8 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
       }
 
       // Calculate the actual amounts of base and quote to be deposited
-      baseAmountOut = Math.mulDiv(shares, baseAmount, _totalSupply, Math.Rounding.Ceil);
-      quoteAmountOut = Math.mulDiv(shares, quoteAmount, _totalSupply, Math.Rounding.Ceil);
+      baseAmountOut = shares.mulDiv(baseAmount, _totalSupply);
+      quoteAmountOut = shares.mulDiv(quoteAmount, _totalSupply);
     }
     // If there is no total supply, calculate initial shares
     else {
@@ -389,7 +392,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   // interact functions
 
   function fundMangrove() external payable {
-    _fundMangrove();
+    MGV.fund{value: msg.value}(address(kandel));
   }
 
   struct MintHeap {
@@ -440,7 +443,6 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     MintHeap memory heap;
 
     (heap.totalInQuote, heap.tick) = _accrueFee();
-
     _updateLastTotalInQuote(heap.totalInQuote);
 
     // Get the current total supply of shares
@@ -453,8 +455,8 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
       // Get the current underlying balances
       (heap.baseBalance, heap.quoteBalance) = getUnderlyingBalances();
       // Calculate proportional amounts of tokens needed based on existing balances
-      heap.baseAmount = Math.mulDiv(mintAmount, heap.baseBalance, heap.totalSupply, Math.Rounding.Ceil);
-      heap.quoteAmount = Math.mulDiv(mintAmount, heap.quoteBalance, heap.totalSupply, Math.Rounding.Ceil);
+      heap.baseAmount = mintAmount.mulDiv(heap.baseBalance, heap.totalSupply);
+      heap.quoteAmount = mintAmount.mulDiv(heap.quoteBalance, heap.totalSupply);
     }
     // If it's the initial mint and funds state is not Unset
     else {
@@ -570,10 +572,8 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     (heap.kandelBalanceBase, heap.kandelBalanceQuote) = getKandelBalances();
 
     // Calculate the user's share of the underlying assets
-    heap.underlyingBalanceBase =
-      Math.mulDiv(shares, heap.vaultBalanceBase + heap.kandelBalanceBase, heap.totalSupply, Math.Rounding.Floor);
-    heap.underlyingBalanceQuote =
-      Math.mulDiv(shares, heap.vaultBalanceQuote + heap.kandelBalanceQuote, heap.totalSupply, Math.Rounding.Floor);
+    heap.underlyingBalanceBase = shares.mulDiv(heap.vaultBalanceBase + heap.kandelBalanceBase, heap.totalSupply);
+    heap.underlyingBalanceQuote = shares.mulDiv(heap.vaultBalanceQuote + heap.kandelBalanceQuote, heap.totalSupply);
 
     // Check if the base withdrawal amount meets the minimum requirement (slippage protection)
     if (heap.underlyingBalanceBase < minAmountBaseOut) {
@@ -1005,10 +1005,6 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     kandel.populate{value: msg.value}(distribution, params, 0, 0);
 
     MangroveVaultEvents.emitSetKandelPosition(position);
-  }
-
-  function _fundMangrove() internal {
-    MGV.fund{value: msg.value}(address(kandel));
   }
 
   /**

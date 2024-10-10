@@ -254,7 +254,8 @@ contract MangroveVaultTest is Test {
     (baseAmountOut, quoteAmountOut, shares) = vault.getMintAmounts(type(uint256).max, quoteAmount);
 
     // check that the quote amount out matches the specified quote amount
-    assertEq(quoteAmountOut, quoteAmount, "Quote amount out doesn't match specified quote amount");
+    assertApproxEqAbs(quoteAmountOut, quoteAmount, 1, "Quote amount out doesn't match specified quote amount");
+    assertLe(quoteAmountOut, quoteAmount, "Quote amount out is greater than specified quote amount");
 
     // deal the tokens
     deal(address(_market.base), user, baseAmountOut);
@@ -589,6 +590,12 @@ contract MangroveVaultTest is Test {
     assertGe(
       Tick.unwrap(bestAsk), Tick.unwrap(currentTick), "Best ask tick should be greater than or equal to current tick"
     );
+
+    position.params = vault.kandelParams();
+    assertEq(position.params.gasprice, 0, "Gasprice should be 0");
+    assertEq(position.params.gasreq, 128_000, "Gasreq should be 128_000");
+    assertEq(position.params.stepSize, 1, "Step size should be 1");
+    assertEq(position.params.pricePoints, 10, "Price points should be 10");
   }
 
   function test_denssityTooLow() public {

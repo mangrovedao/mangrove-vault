@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {GeometricKandel} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/GeometricKandel.sol";
+import {
+  GeometricKandel,
+  CoreKandel
+} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/GeometricKandel.sol";
 import {OfferType} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/TradesBaseQuotePair.sol";
 import {OLKey, Local, IMangrove, Tick} from "@mgv/src/IMangrove.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
@@ -38,7 +41,23 @@ library GeometricKandelExtra {
    * @return params_ The Params struct containing the kandel parameters
    */
   function _params(GeometricKandel kandel) internal view returns (Params memory params_) {
-    (params_.gasprice, params_.gasreq, params_.stepSize, params_.pricePoints) = kandel.params();
+    // (params_.gasprice, params_.gasreq, params_.stepSize, params_.pricePoints) = kandel.params();
+    bytes32 selectorUnstripped = keccak256("params()");
+    bytes memory data;
+
+    assembly {
+      mstore(data, selectorUnstripped)
+
+      let success := staticcall(gas(), kandel, data, 0x04, params_, 0x80)
+
+      // Check if the call was successful
+      if iszero(success) {
+        // Revert with the same error message
+        let ptr := mload(0x40)
+        returndatacopy(ptr, 0, returndatasize())
+        revert(ptr, returndatasize())
+      }
+    }
   }
 
   /**
