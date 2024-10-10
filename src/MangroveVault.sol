@@ -91,7 +91,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   uint256 internal immutable QUOTE_SCALE;
 
   /// @notice The number of decimals of the LP token.
-  uint8 internal DECIMALS;
+  uint8 internal immutable DECIMALS;
 
   /// @notice The oracle used to get the price of the token pair.
   IOracle public immutable oracle;
@@ -131,7 +131,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @param _BASE The address of the first token in the token pair.
    * @param _QUOTE The address of the second token in the token pair.
    * @param _tickSpacing The spacing between ticks on the Mangrove market.
-   * @param _decimals The number of decimals of the LP token.
+   * @param _decimals The number of decimals of the LP token (must be higher or equal to the decimals of the quote token and ideally higher or equal to the decimals of the base token).
    * @param _oracle The address of the oracle used to get the price of the token pair.
    * @param name The name of the ERC20 token, chosen to represent the Mangrove market and eventually the vault manager.
    * @param symbol The symbol of the ERC20 token, chosen to represent the Mangrove market and eventually the vault manager.
@@ -152,6 +152,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     MGV = _seeder.MGV();
     BASE = _BASE;
     QUOTE = _QUOTE;
+    // Only one kandel instance can be deployed for a given vault, so liquidity sharing can be set to false.
     kandel = _seeder.sow(OLKey(_BASE, _QUOTE, _tickSpacing), false);
     oracle = IOracle(_oracle);
     uint8 offset = _decimals - ERC20(_QUOTE).decimals();
