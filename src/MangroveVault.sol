@@ -4,7 +4,7 @@ pragma solidity ^0.8.20;
 // Mangrove
 import {IMangrove, Local, OLKey} from "@mgv/src/IMangrove.sol";
 import {Tick} from "@mgv/lib/core/TickLib.sol";
-import {MAX_SAFE_VOLUME} from "@mgv/lib/core/Constants.sol";
+import {MAX_SAFE_VOLUME, MAX_TICK} from "@mgv/lib/core/Constants.sol";
 
 // Mangrove Strategies
 import {AbstractKandelSeeder} from
@@ -125,6 +125,21 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   /// @notice The current state of the vault.
   State internal _state;
 
+  /// @notice The address of the manager of the vault.
+  /// @dev The manager is only allowed to rebalance and set the position
+  address public manager;
+
+  /// @notice The maximum price spread for the rebalance function.
+  /// @dev This is the maximum price spread to the real price for the rebalance function.
+  uint256 public maxPriceSpread;
+
+  modifier onlyOwnerOrManager() {
+    if (msg.sender != owner() && msg.sender != manager) {
+      revert MangroveVaultErrors.ManagerOwnerUnauthorized(msg.sender);
+    }
+    _;
+  }
+
   /**
    * @notice Constructor for the MangroveVault contract.
    * @param _seeder The AbstractKandelSeeder contract instance used to initialize the Kandel contract.
@@ -164,6 +179,12 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
 
     _state.feeRecipient = _owner;
     emit MangroveVaultEvents.SetFeeData(0, 0, _owner);
+
+    manager = _owner;
+    emit MangroveVaultEvents.SetManager(_owner);
+
+    maxPriceSpread = type(uint256).max;
+    emit MangroveVaultEvents.SetMaxPriceSpread(type(uint256).max);
   }
 
   /**
@@ -297,6 +318,42 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     uint256 baseAmount;
     (baseAmount, quoteAmount) = getUnderlyingBalances();
     (quoteAmount, tick) = _toQuoteAmount(baseAmount, quoteAmount);
+  }
+
+  /**
+   * @notice Calculates the adjusted minimum amount for a swap based on the current price and maximum price spread
+   * @dev This function adjusts the minimum amount to limit losses from the manager by the owner.
+   * @param amountOut The amount of tokens to be swapped out
+   * @param _amountInMin The initial minimum amount of tokens to be received
+   * @param sell If true, indicates a sell operation; if false, indicates a buy operation
+   * @return amountInMin The adjusted minimum amount of tokens to be received
+   */
+  function adjustedAmountInMin(uint256 amountOut, uint256 _amountInMin, bool sell)
+    public
+    view
+    returns (uint256 amountInMin)
+  {
+    // If maxPriceSpread is set to type(uint).max, we use the default amountInMin
+    if (maxPriceSpread == type(uint256).max) {
+      return _amountInMin;
+    }
+
+    Tick tick = _currentTick();
+    uint256 _maxPriceSpread = maxPriceSpread;
+
+    if (sell) {
+      // If we are selling, this means that we have to reduce the tick to reduce the amount of quote we receive
+      // So we decrease the tick by the max price spread
+      tick = Tick.wrap(Tick.unwrap(tick) - _maxPriceSpread.toInt256());
+      amountInMin = tick.inboundFromOutboundUp(amountOut);
+    } else {
+      // If we are buying, this means that we have to increase the tick to increase the amount of quote we receive
+      // So we increase the tick by the max price spread
+      tick = Tick.wrap(Tick.unwrap(tick) + _maxPriceSpread.toInt256());
+      amountInMin = tick.outboundFromInbound(amountOut);
+    }
+    // We make sure that the amountInMin is at least the amountInMin provided
+    amountInMin = Math.max(amountInMin, _amountInMin);
   }
 
   /**
@@ -624,7 +681,11 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @param contractAddress The address of the contract to be allowed
    */
   function allowSwapContract(address contractAddress) external onlyOwner {
-    if (contractAddress == address(0) || contractAddress == address(this) || contractAddress == address(kandel)) {
+    // prevent the contract from calling itself, the kandel contract, the base token, or the quote token
+    if (
+      contractAddress == address(0) || contractAddress == address(this) || contractAddress == address(kandel)
+        || contractAddress == BASE || contractAddress == QUOTE
+    ) {
       revert MangroveVaultErrors.UnauthorizedSwapContract(contractAddress);
     }
 
@@ -655,7 +716,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
 
   /**
    * @notice Executes a swap operation on behalf of the vault
-   * @dev This function can only be called by the owner of the contract
+   * @dev This function can only be called by the owner or the manager of the contract
    * @param target The address of the contract to execute the swap on
    * @param data The calldata to be sent to the target contract
    * @param amountOut The amount of tokens to be swapped out
@@ -664,7 +725,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    */
   function swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell)
     external
-    onlyOwner
+    onlyOwnerOrManager
     nonReentrant
   {
     _swap(target, data, amountOut, amountInMin, sell);
@@ -672,7 +733,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
 
   /**
    * @notice Executes a swap operation and updates the Kandel position in a single transaction
-   * @dev This function can only be called by the owner of the contract
+   * @dev This function can only be called by the owner or the manager of the contract
    * @param target The address of the contract to execute the swap on
    * @param data The calldata to be sent to the target contract
    * @param amountOut The amount of tokens to be swapped out
@@ -687,17 +748,17 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     uint256 amountInMin,
     bool sell,
     KandelPosition memory position
-  ) external onlyOwner nonReentrant {
+  ) external onlyOwnerOrManager nonReentrant {
     _setPosition(position);
     _swap(target, data, amountOut, amountInMin, sell);
   }
 
   /**
    * @notice Updates the Kandel position
-   * @dev This function can only be called by the owner of the contract
+   * @dev This function can only be called by the owner or the manager of the contract
    * @param position The new Kandel position to be set
    */
-  function setPosition(KandelPosition memory position) external onlyOwner {
+  function setPosition(KandelPosition memory position) external onlyOwnerOrManager {
     _setPosition(position);
     _updatePosition();
   }
@@ -786,8 +847,32 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   }
 
   /**
-   * @notice Executes a swap operation using an external contract
+   * @notice Sets the manager of the vault
    * @dev This function can only be called by the owner of the contract
+   * @param newManager The address of the new manager
+   */
+  function setManager(address newManager) external onlyOwner {
+    if (newManager == address(0)) revert MangroveVaultErrors.ZeroAddress();
+    manager = newManager;
+    emit MangroveVaultEvents.SetManager(newManager);
+  }
+
+  /**
+   * @notice Sets the maximum price spread for the rebalance function
+   * @dev This function can only be called by the owner of the contract
+   * @param newMaxPriceSpread The new maximum price spread to be set
+   */
+  function setMaxPriceSpread(uint256 newMaxPriceSpread) external onlyOwner {
+    if (newMaxPriceSpread != type(uint256).max && newMaxPriceSpread > 2 * uint256(MAX_TICK)) {
+      revert MangroveVaultErrors.InvalidMaxPriceSpread(newMaxPriceSpread);
+    }
+    maxPriceSpread = newMaxPriceSpread;
+    emit MangroveVaultEvents.SetMaxPriceSpread(newMaxPriceSpread);
+  }
+
+  /**
+   * @notice Executes a swap operation using an external contract
+   * @dev This function can only be called by the owner or the manager of the contract
    * @param target The address of the external swap contract
    * @param data The calldata to be sent to the swap contract
    * @param amountOut The amount of tokens to be swapped out
@@ -810,6 +895,9 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
 
     // Get current balances of BASE and QUOTE tokens in the vault
     (uint256 baseBalance, uint256 quoteBalance) = getVaultBalances();
+
+    // Adjust the amountInMin to account for the maximum price spread set by the owner
+    amountInMin = adjustedAmountInMin(amountOut, amountInMin, sell);
 
     if (sell) {
       // If selling BASE, check if we need to withdraw from Kandel

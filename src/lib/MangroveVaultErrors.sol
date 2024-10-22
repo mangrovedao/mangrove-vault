@@ -83,4 +83,18 @@ library MangroveVaultErrors {
    * @dev This can occur in the withdrawNative function in MangroveVault.sol
    */
   error NativeTransferFailed();
+
+  /**
+   * @notice Thrown when an unauthorized account attempts to perform an owner/manager-only action
+   * @dev This error is used to restrict access to functions that should only be callable by the owner of the manager
+   * @param account The address of the unauthorized account that attempted the action
+   */
+  error ManagerOwnerUnauthorized(address account);
+
+  /**
+   * @notice Thrown when the maximum price spread is invalid
+   * @dev This can occur when setting the maximum price spread in MangroveVault.sol
+   * @param maxPriceSpread The invalid maximum price spread
+   */
+  error InvalidMaxPriceSpread(uint256 maxPriceSpread);
 }

@@ -18,6 +18,7 @@ import {
 import {MAX_SAFE_VOLUME, MIN_TICK, MAX_TICK} from "@mgv/lib/core/Constants.sol";
 import {MangroveVaultConstants} from "../src/lib/MangroveVaultConstants.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {OfferType} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/TradesBaseQuotePair.sol";
 import {
@@ -35,6 +36,7 @@ import {HasIndexedBidsAndAsks} from
 
 contract MangroveVaultTest is Test {
   using Math for uint256;
+  using SafeCast for uint256;
 
   IMangrove public mgv;
   MgvReader public reader;
@@ -73,6 +75,7 @@ contract MangroveVaultTest is Test {
   address owner;
   address feeRecipient;
   address user;
+  address manager;
 
   function deployMangrove() internal {
     oracle = new MgvOracle({governance_: address(this), initialMutator_: address(this), initialGasPrice_: 1});
@@ -112,6 +115,7 @@ contract MangroveVaultTest is Test {
     owner = vm.createWallet("Owner").addr;
     feeRecipient = vm.createWallet("Fee Recipient").addr;
     user = vm.createWallet("User").addr;
+    manager = vm.createWallet("Manager").addr;
 
     factory = new MangroveVaultFactory();
 
@@ -238,6 +242,8 @@ contract MangroveVaultTest is Test {
       address(_market.oracle),
       owner
     );
+    vault.setManager(manager);
+    vault.setFeeData(0, 0, feeRecipient);
     vm.stopPrank();
     kandel = address(vault.kandel());
   }
@@ -494,7 +500,8 @@ contract MangroveVaultTest is Test {
 
     vm.startPrank(user);
 
-    bytes memory revertMsg = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, address(user));
+    bytes memory revertMsgManager = abi.encodeWithSelector(MangroveVaultErrors.ManagerOwnerUnauthorized.selector, user);
+    bytes memory revertMsg = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, user);
 
     vm.expectRevert(revertMsg);
     vault.allowSwapContract(address(this));
@@ -502,11 +509,11 @@ contract MangroveVaultTest is Test {
     vm.expectRevert(revertMsg);
     vault.disallowSwapContract(address(this));
 
-    vm.expectRevert(revertMsg);
+    vm.expectRevert(revertMsgManager);
     vault.swap(address(this), "", 0, 0, false);
 
     KandelPosition memory position;
-    vm.expectRevert(revertMsg);
+    vm.expectRevert(revertMsgManager);
     vault.setPosition(position);
 
     vm.expectRevert(revertMsg);
@@ -521,11 +528,56 @@ contract MangroveVaultTest is Test {
     vm.expectRevert(revertMsg);
     vault.pause(true);
 
-    // vm.expectRevert(revertMsg);
-    // vault.unpause();
+    vm.expectRevert(revertMsg);
+    vault.setFeeData(0, 0, address(0));
+
+    vm.expectRevert(revertMsg);
+    vault.setMaxPriceSpread(0);
+
+    vm.expectRevert(revertMsg);
+    vault.setManager(address(0));
+
+    vm.expectRevert(revertMsgManager);
+    vault.swapAndSetPosition(address(this), "", 0, 0, false, position);
+
+    vm.expectRevert(revertMsgManager);
+    vault.swap(address(this), "", 0, 0, false);
+
+    vm.stopPrank();
+
+    vm.startPrank(manager);
+
+    revertMsg = abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, manager);
+
+    vm.expectRevert(revertMsg);
+    vault.setMaxPriceSpread(0);
+
+    vm.expectRevert(revertMsg);
+    vault.allowSwapContract(address(this));
+
+    vm.expectRevert(revertMsg);
+    vault.disallowSwapContract(address(this));
+
+    vm.expectRevert(revertMsg);
+    vault.withdrawFromMangrove(0, payable(user));
+
+    vm.expectRevert(revertMsg);
+    vault.withdrawERC20(address(WETH), 0);
+
+    vm.expectRevert(revertMsg);
+    vault.withdrawNative();
+
+    vm.expectRevert(revertMsg);
+    vault.pause(true);
 
     vm.expectRevert(revertMsg);
     vault.setFeeData(0, 0, address(0));
+
+    vm.expectRevert(revertMsg);
+    vault.setMaxPriceSpread(0);
+
+    vm.expectRevert(revertMsg);
+    vault.setManager(address(0));
 
     vm.stopPrank();
   }
@@ -975,7 +1027,7 @@ contract MangroveVaultTest is Test {
     vault.swap(address(1), abi.encodeCall(this.swapMock, (WETH, USDC, 0, 0)), 0, 0, true); // sell 1 WETH for USDC
   }
 
-  function test_swapIncorrectSlippage() public {
+  function test_swapIncorrectSlippageParam() public {
     (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0);
 
     KandelPosition memory position;
@@ -1028,6 +1080,39 @@ contract MangroveVaultTest is Test {
     (uint256 baseAmountEnd, uint256 quoteAmountEnd) = vault.getUnderlyingBalances();
     assertEq(baseAmountEnd, baseAmountStart - 1 ether, "Base balance should be equal to baseAmountStart - 1 ether");
     assertEq(quoteAmountEnd, quoteAmountStart + 3000e6, "Quote balance should be equal to quoteAmountStart + 3000e6");
+  }
+
+  function test_swapMaxPriceSpread() public {
+    (MangroveVault vault, MarketWOracle memory _market,) = deployVault(0);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vm.prank(owner);
+    // should get at least currentTick minus 100 ticks for price
+    vault.setMaxPriceSpread(100);
+
+    vm.prank(owner);
+    vault.allowSwapContract(address(this));
+
+    Tick price = Tick.wrap(Tick.unwrap(vault.currentTick()) - 100);
+    uint256 expectedAmountInMin = price.inboundFromOutboundUp(1 ether);
+
+    vm.prank(manager);
+    vm.expectRevert(
+      abi.encodeWithSelector(
+        MangroveVaultErrors.SlippageExceeded.selector, expectedAmountInMin, expectedAmountInMin - 1
+      )
+    );
+    vault.swap(
+      address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, expectedAmountInMin - 1)), 1 ether, 0, true
+    );
+
+    vm.prank(manager);
+    vm.expectEmit(false, false, false, true, address(vault));
+    emit MangroveVaultEvents.Swap(address(this), -1 ether, expectedAmountInMin.toInt256(), true);
+    vault.swap(
+      address(this), abi.encodeCall(this.swapMock, (WETH, USDC, 1 ether, expectedAmountInMin)), 1 ether, 0, true
+    );
   }
 
   function test_swapInPassive() public {
@@ -1108,22 +1193,5 @@ contract MangroveVaultTest is Test {
 
     // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
     mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
-  }
-
-  function test_deployKandel() public {
-    // MangroveVault vault = new MangroveVault(
-    //   kandelSeeder, address(WETH), address(USDC), 1, 12, "Mangrove Vault", "MGVv", address(ETH_USDC_ORACLE)
-    // );
-
-    // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) = vault.getMintAmounts(1 ether, 3000e6);
-    // deal(address(WETH), address(this), baseAmountOut);
-    // deal(address(USDC), address(this), quoteAmountOut);
-    // WETH.approve(address(vault), baseAmountOut);
-    // USDC.approve(address(vault), quoteAmountOut);
-    // vault.mint(shares, baseAmountOut, quoteAmountOut);
-
-    // deal(address(WETH), address(this), 1 ether);
-    // deal(address(WETH), address(this), 1 ether);
-    // revert();
   }
 }

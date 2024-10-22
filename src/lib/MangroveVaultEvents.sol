@@ -123,6 +123,18 @@ library MangroveVaultEvents {
   event OracleCreated(address creator, address oracle);
 
   /**
+   * @notice Emitted when the manager is set
+   * @param manager Address of the new manager
+   */
+  event SetManager(address manager);
+
+  /**
+   * @notice Emitted when the maximum price spread is set
+   * @param maxPriceSpread The new maximum price spread
+   */
+  event SetMaxPriceSpread(uint256 maxPriceSpread);
+
+  /**
    * @notice Internal function to emit the SetKandelPosition event
    * @param position KandelPosition struct containing the position details
    */
