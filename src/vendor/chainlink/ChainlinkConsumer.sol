@@ -16,6 +16,10 @@ library ChainlinkConsumer {
    * @return The latest price as a uint256
    * @dev If the aggregator address is zero, it returns 1 as a default value
    * @dev Reverts if the price is negative
+   * @dev Notes on safety:
+   * * Staleness is not checked because it's assumed that Chainlink will keep an up to date price feed
+   * * Arbitrum outages and sequenced down on L2s are not checked because expected to not happen.
+   * * In case this the above expected events happen, users should withdraw their shares and trusted managers should remove fees and keep the MangroveVault unpaused.
    */
   function getPrice(AggregatorV3Interface _aggregator) internal view returns (uint256) {
     if (address(_aggregator) == address(0)) return 1;
