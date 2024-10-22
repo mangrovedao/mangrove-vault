@@ -77,4 +77,10 @@ library MangroveVaultErrors {
    * @param received The actual received amount
    */
   error SlippageExceeded(uint256 expected, uint256 received);
+
+  /**
+   * @notice Thrown when a native transfer fails
+   * @dev This can occur in the withdrawNative function in MangroveVault.sol
+   */
+  error NativeTransferFailed();
 }

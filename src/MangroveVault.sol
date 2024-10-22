@@ -732,7 +732,10 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @dev This function can only be called by the owner of the contract
    */
   function withdrawNative() external onlyOwner {
-    payable(msg.sender).transfer(address(this).balance);
+    (bool success,) = payable(msg.sender).call{value: address(this).balance}("");
+    if (!success) {
+      revert MangroveVaultErrors.NativeTransferFailed();
+    }
   }
 
   /**
