@@ -264,7 +264,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   }
 
   /**
-   * @notice Retrieves the balances of the vault for both tokens minus the manager's balance.
+   * @notice Retrieves the balances of the vault for both tokens.
    * @return baseAmount The balance of base in the vault.
    * @return quoteAmount The balance of quote in the vault.
    */
@@ -404,7 +404,6 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     uint256 quoteBalance;
     uint256 baseAmount;
     uint256 quoteAmount;
-    FundsState fundsState;
     Tick tick;
     uint256 computedShares;
     IERC20 base;
@@ -447,8 +446,6 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
 
     // Get the current total supply of shares
     heap.totalSupply = totalSupply();
-    // Get the current funds state
-    heap.fundsState = _state.fundsState;
 
     // If there are existing shares
     if (heap.totalSupply != 0) {
@@ -458,7 +455,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
       heap.baseAmount = mintAmount.mulDiv(heap.baseBalance, heap.totalSupply);
       heap.quoteAmount = mintAmount.mulDiv(heap.quoteBalance, heap.totalSupply);
     }
-    // If it's the initial mint and funds state is not Unset
+    // If it's the initial mint
     else {
       // Calculate base amount based on max quote amount and current price
       heap.baseAmount = heap.tick.outboundFromInbound(quoteAmountMax);
@@ -469,7 +466,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
       } else {
         heap.quoteAmount = quoteAmountMax;
       }
-      // Calculate shares based on geometric mean of token amounts
+      // Calculate shares based on the estimated total in quote scaled to `DECIMALS`
       (, heap.computedShares) = ((heap.tick.inboundFromOutboundUp(heap.baseAmount) + heap.quoteAmount) * QUOTE_SCALE)
         .trySub(MangroveVaultConstants.MINIMUM_LIQUIDITY);
       // Ensure computed shares match the requested mint amount
