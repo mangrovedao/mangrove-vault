@@ -267,6 +267,22 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
   }
 
   /**
+   * @notice Retrieves the last total in quote value.
+   * @return The last total in quote value as a uint128.
+   */
+  function lastTotalInQuote() external view returns (uint128) {
+    return _state.lastTotalInQuote;
+  }
+
+  /**
+   * @notice Retrieves the maximum total in quote value.
+   * @return The maximum total in quote value as a uint128.
+   */
+  function maxTotalInQuote() external view returns (uint128) {
+    return _state.maxTotalInQuote;
+  }
+
+  /**
    * @notice Gets the current tick of the Kandel position.
    * @return The current tick
    */
@@ -722,13 +738,16 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @param amountOut The amount of tokens to be swapped out
    * @param amountInMin The minimum amount of tokens to be received
    * @param sell If true, sell BASE; otherwise, sell QUOTE
+   * @return netBaseChange The net change in the BASE token balance
+   * @return netQuoteChange The net change in the QUOTE token balance
    */
   function swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell)
     external
     onlyOwnerOrManager
     nonReentrant
+    returns (int256 netBaseChange, int256 netQuoteChange)
   {
-    _swap(target, data, amountOut, amountInMin, sell);
+    return _swap(target, data, amountOut, amountInMin, sell);
   }
 
   /**
@@ -740,6 +759,8 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @param amountInMin The minimum amount of tokens to be received
    * @param sell If true, sell BASE; otherwise, sell QUOTE
    * @param position The new Kandel position to be set
+   * @return netBaseChange The net change in the BASE token balance
+   * @return netQuoteChange The net change in the QUOTE token balance
    */
   function swapAndSetPosition(
     address target,
@@ -748,9 +769,9 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     uint256 amountInMin,
     bool sell,
     KandelPosition memory position
-  ) external onlyOwnerOrManager nonReentrant {
+  ) external onlyOwnerOrManager nonReentrant returns (int256 netBaseChange, int256 netQuoteChange) {
     _setPosition(position);
-    _swap(target, data, amountOut, amountInMin, sell);
+    return _swap(target, data, amountOut, amountInMin, sell);
   }
 
   /**
@@ -839,11 +860,11 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @notice Sets the maximum total value in quote token
    * @dev This function can only be called by the owner of the contract
    * @dev This is limited by 128 bits
-   * @param maxTotalInQuote The new maximum total value in quote token
+   * @param _maxTotalInQuote The new maximum total value in quote token
    */
-  function setMaxTotalInQuote(uint128 maxTotalInQuote) external onlyOwner {
-    _state.maxTotalInQuote = maxTotalInQuote;
-    emit MangroveVaultEvents.SetMaxTotalInQuote(maxTotalInQuote);
+  function setMaxTotalInQuote(uint128 _maxTotalInQuote) external onlyOwner {
+    _state.maxTotalInQuote = _maxTotalInQuote;
+    emit MangroveVaultEvents.SetMaxTotalInQuote(_maxTotalInQuote);
   }
 
   /**
@@ -886,9 +907,13 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * 5. Executes the swap by calling the target contract
    * 6. Verifies that the received amount meets the minimum requirement
    * 7. Calculates and returns the net changes in token balances
-   *
+   * @return netBaseChange The net change in the BASE token balance
+   * @return netQuoteChange The net change in the QUOTE token balance
    */
-  function _swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell) internal {
+  function _swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell)
+    internal
+    returns (int256 netBaseChange, int256 netQuoteChange)
+  {
     if (!allowedSwapContracts[target]) {
       revert MangroveVaultErrors.UnauthorizedSwapContract(target);
     }
@@ -928,8 +953,8 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     (uint256 newBaseBalance, uint256 newQuoteBalance) = getVaultBalances();
 
     // Calculate net changes in BASE and QUOTE
-    int256 netBaseChange = newBaseBalance.toInt256() - baseBalance.toInt256();
-    int256 netQuoteChange = newQuoteBalance.toInt256() - quoteBalance.toInt256();
+    netBaseChange = newBaseBalance.toInt256() - baseBalance.toInt256();
+    netQuoteChange = newQuoteBalance.toInt256() - quoteBalance.toInt256();
 
     if (sell) {
       (bool success, uint256 receivedQuote) = newQuoteBalance.trySub(quoteBalance);
