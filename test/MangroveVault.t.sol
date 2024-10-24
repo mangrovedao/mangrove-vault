@@ -1194,4 +1194,30 @@ contract MangroveVaultTest is Test {
     // (uint256 baseAmountOut, uint256 quoteAmountOut, uint256 shares) =
     mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
   }
+
+  function test_setMaxPriceSpread() public {
+    (MangroveVault vault,,) = deployVault(0);
+
+    uint256 maxPriceSpread = 2 * uint256(MAX_TICK);
+
+    // Test setting max price spread to a valid value
+    vm.prank(owner);
+    vault.setMaxPriceSpread(maxPriceSpread);
+    assertEq(vault.maxPriceSpread(), maxPriceSpread, "Max price spread should be set to the valid value");
+
+    // Test setting max price spread to the maximum uint256 value
+    vm.prank(owner);
+    vault.setMaxPriceSpread(type(uint256).max);
+    assertEq(vault.maxPriceSpread(), type(uint256).max, "Max price spread should be set to the maximum uint256 value");
+
+    // Test setting max price spread to an invalid value (greater than 2 * MAX_TICK)
+    vm.prank(owner);
+    vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.InvalidMaxPriceSpread.selector, maxPriceSpread + 1));
+    vault.setMaxPriceSpread(maxPriceSpread + 1);
+
+    // Test setting max price spread to an invalid value (not equal to type(uint256).max)
+    vm.prank(owner);
+    vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.InvalidMaxPriceSpread.selector, 3 * uint256(MAX_TICK)));
+    vault.setMaxPriceSpread(3 * uint256(MAX_TICK));
+  }
 }
