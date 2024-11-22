@@ -176,5 +176,27 @@ These functions have been directly copied from the `mangrove-strats` repository 
 
 The comprehensive audit of this repository, combined with the pre-audited functions from `mangrove-strats`, will provide users with a robust and secure foundation for interacting with the MangroveVault system once the audit is completed.
 
+## Mint Helper
 
+The `MintHelperV1` contract is a utility contract designed to simplify the process of minting MangroveVault shares. It addresses a key challenge in the minting process: the need to specify both the mint amount and maximum token amounts when minting shares directly through the vault.
 
+Key features of the MintHelperV1:
+
+1. Simplified Minting:
+   - Takes desired base and quote token amounts to deposit
+   - Automatically calculates the optimal mint amount based on current vault state
+   - Handles token approvals and minting in a single transaction
+   - Returns any unused tokens to the sender
+
+2. Slippage Protection:
+   - Includes a minimum shares parameter to protect against receiving fewer shares than expected
+   - Reverts the transaction if the calculated mint amount is below the minimum threshold
+   - This protection is crucial since the optimal mint amount can change between blocks due to price/balance changes
+
+3. Security Features:
+   - Implements reentrancy protection via OpenZeppelin's ReentrancyGuard
+   - Uses SafeERC20 for secure token transfers
+   - Resets token allowances after minting
+   - Includes owner-only function to recover any stuck tokens
+
+The helper significantly reduces the complexity of minting vault shares by handling all the necessary calculations and token movements in a single, atomic transaction. This makes it easier and safer for users to participate in the vault while maintaining protection against adverse price movements.
