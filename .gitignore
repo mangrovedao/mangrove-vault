@@ -12,3 +12,7 @@ docs/
 
 # Dotenv file
 .env
+
+verify.sh
+verify_arb.sh
+keystore.json
