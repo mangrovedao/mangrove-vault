@@ -33,6 +33,7 @@ import {MangroveVaultFactory} from "../src/MangroveVaultFactory.sol";
 import {GeometricKandel} from "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/GeometricKandel.sol";
 import {HasIndexedBidsAndAsks} from
   "@mgv-strats/src/strategies/offer_maker/market_making/kandel/abstract/HasIndexedBidsAndAsks.sol";
+import {MintHelperV1} from "../src/mint-helper/MintHelperV1.sol";
 
 contract MangroveVaultTest is Test {
   using Math for uint256;
@@ -1219,5 +1220,34 @@ contract MangroveVaultTest is Test {
     vm.prank(owner);
     vm.expectRevert(abi.encodeWithSelector(MangroveVaultErrors.InvalidMaxPriceSpread.selector, 3 * uint256(MAX_TICK)));
     vault.setMaxPriceSpread(3 * uint256(MAX_TICK));
+  }
+
+  function test_mintHelperV1() public {
+    (MangroveVault vault, ,) = deployVault(0);
+
+    MintHelperV1 mintHelper = new MintHelperV1();
+
+    deal(address(WETH), owner, 1 ether);
+    deal(address(USDC), owner, 100_000e6);
+
+    uint256 base = 1 ether;
+    uint256 quote = 100_000e6;
+
+    (uint256 baseAmount, uint256 quoteAmount, uint256 mintAmount) = vault.getMintAmounts(base, quote);
+
+    vm.startPrank(owner);
+    WETH.approve(address(mintHelper), 1 ether);
+    USDC.approve(address(mintHelper), 100_000e6);
+
+    vm.expectRevert(abi.encodeWithSelector(MintHelperV1.InvalidMinShares.selector, mintAmount + 1, mintAmount));
+    mintHelper.mint(vault, 1 ether, 100_000e6, mintAmount + 1);
+
+    (uint256 realMintAmount, uint256 realBaseAmount, uint256 realQuoteAmount) =
+      mintHelper.mint(vault, 1 ether, 100_000e6, mintAmount);
+    vm.stopPrank();
+
+    assertEq(realMintAmount, mintAmount, "Mint amount should be equal");
+    assertEq(realBaseAmount, baseAmount, "Base amount should be equal");
+    assertEq(realQuoteAmount, quoteAmount, "Quote amount should be equal");
   }
 }
