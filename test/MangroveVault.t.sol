@@ -1223,7 +1223,7 @@ contract MangroveVaultTest is Test {
   }
 
   function test_mintHelperV1() public {
-    (MangroveVault vault, ,) = deployVault(0);
+    (MangroveVault vault,,) = deployVault(0);
 
     MintHelperV1 mintHelper = new MintHelperV1();
 

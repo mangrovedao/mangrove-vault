@@ -70,7 +70,7 @@ contract VaultChainDeployer is Script {
       address(oracle),
       msg.sender
     );
-  
+
     console.log("Vault: %s", address(vault));
     contructorArgs = abi.encode(
       seeder,
@@ -84,7 +84,7 @@ contract VaultChainDeployer is Script {
       vault.owner()
     );
     console.logBytes(contructorArgs);
-    
+
     vm.broadcast();
     vault.setMaxTotalInQuote(0);
   }

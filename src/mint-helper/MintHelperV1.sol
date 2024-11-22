@@ -32,7 +32,6 @@ contract MintHelperV1 is Ownable(msg.sender), ReentrancyGuard {
    */
   error InvalidMinShares(uint256 minShares, uint256 mintAmount);
 
-
   /**
    * @notice Mints MangroveVault shares by depositing tokens
    * @param vault The MangroveVault contract to mint shares in
