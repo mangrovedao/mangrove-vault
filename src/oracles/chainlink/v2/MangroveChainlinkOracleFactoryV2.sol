@@ -34,14 +34,8 @@ contract MangroveChainlinkOracleFactoryV2 {
     ERC4626Feed calldata quoteVault,
     bytes32 salt
   ) external returns (MangroveChainlinkOracleV2 oracle) {
-    oracle = new MangroveChainlinkOracleV2{salt: salt}(
-      baseFeed1,
-      baseFeed2,
-      quoteFeed1,
-      quoteFeed2,
-      baseVault,
-      quoteVault
-    );
+    oracle =
+      new MangroveChainlinkOracleV2{salt: salt}(baseFeed1, baseFeed2, quoteFeed1, quoteFeed2, baseVault, quoteVault);
     isOracle[address(oracle)] = true;
     emit MangroveVaultEvents.OracleCreated(msg.sender, address(oracle));
   }

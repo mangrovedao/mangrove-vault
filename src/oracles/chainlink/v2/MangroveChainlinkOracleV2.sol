@@ -18,7 +18,6 @@ import {ERC4626Consumer} from "../../../vendor/ERC4626/ERC4626Consumer.sol";
  * @param baseDecimals Number of decimals for the base token
  * @param quoteDecimals Number of decimals for the quote token
  */
-
 struct ChainlinkFeed {
   address feed;
   uint256 baseDecimals;
@@ -35,7 +34,6 @@ struct ERC4626Feed {
   address vault;
   uint256 conversionSample;
 }
-
 
 /**
  * @title MangroveChainlinkOracle
@@ -58,7 +56,7 @@ contract MangroveChainlinkOracleV2 is IOracle {
 
   /// @notice The ERC4626 vault for the base token
   IERC4626 public immutable baseVault;
-  /// @notice The ERC4626 vault for the quote token 
+  /// @notice The ERC4626 vault for the quote token
   IERC4626 public immutable quoteVault;
 
   /// @notice Sample amount used for price conversion calculations in the base vault
@@ -166,4 +164,3 @@ contract MangroveChainlinkOracleV2 is IOracle {
     );
   }
 }
-

@@ -91,8 +91,7 @@ contract ChainlinkOracleV2Test is Test {
     assertApproxEqAbs(Tick.unwrap(oracle.tick()), -6932, 1, "Tick should be -6932");
 
     // put on the quote side
-    oracle =
-      new MangroveChainlinkOracleV2(feed, feed, feed, feed, vaultFeed, ERC4626Feed(address(vault), 1 ether));
+    oracle = new MangroveChainlinkOracleV2(feed, feed, feed, feed, vaultFeed, ERC4626Feed(address(vault), 1 ether));
     assertApproxEqAbs(Tick.unwrap(oracle.tick()), 6932, 1, "Tick should be 6932");
   }
 
@@ -108,8 +107,7 @@ contract ChainlinkOracleV2Test is Test {
     assertApproxEqAbs(Tick.unwrap(oracle.tick()), -6932, 1, "Tick should be -6932");
 
     // put on the base side
-    oracle =
-      new MangroveChainlinkOracleV2(feed, feed, feed, feed, ERC4626Feed(address(vault), 1 ether), vaultFeed);
+    oracle = new MangroveChainlinkOracleV2(feed, feed, feed, feed, ERC4626Feed(address(vault), 1 ether), vaultFeed);
     assertApproxEqAbs(Tick.unwrap(oracle.tick()), 6932, 1, "Tick should be 6932");
   }
 
@@ -124,14 +122,16 @@ contract ChainlinkOracleV2Test is Test {
     vault2.mint(address(this), 1 ether);
 
     ChainlinkFeed memory feed;
-    MangroveChainlinkOracleV2 oracle =
-      new MangroveChainlinkOracleV2(feed, feed, feed, feed, ERC4626Feed(address(vault1), 1 ether), ERC4626Feed(address(vault2), 1 ether));
+    MangroveChainlinkOracleV2 oracle = new MangroveChainlinkOracleV2(
+      feed, feed, feed, feed, ERC4626Feed(address(vault1), 1 ether), ERC4626Feed(address(vault2), 1 ether)
+    );
 
     assertApproxEqAbs(Tick.unwrap(oracle.tick()), 4054, 1, "Tick should be 4054");
 
     // reverse the sides
-    oracle =
-      new MangroveChainlinkOracleV2(feed, feed, feed, feed, ERC4626Feed(address(vault2), 1 ether), ERC4626Feed(address(vault1), 1 ether));
+    oracle = new MangroveChainlinkOracleV2(
+      feed, feed, feed, feed, ERC4626Feed(address(vault2), 1 ether), ERC4626Feed(address(vault1), 1 ether)
+    );
     assertApproxEqAbs(Tick.unwrap(oracle.tick()), -4054, 1, "Tick should be -4054");
   }
 }
