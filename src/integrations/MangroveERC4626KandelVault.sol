@@ -76,6 +76,15 @@ contract MangroveERC4626KandelVault is MangroveVault {
     if (!s) _revert(returnData);
   }
 
+  ///@notice Returns the current vault addresses for the base and quote tokens
+  ///@return baseVault The address of the vault for the base token
+  ///@return quoteVault The address of the vault for the quote token
+  function currentVaults() public view returns (address baseVault, address quoteVault) {
+    (bool s, bytes memory returnData) = address(kandel).staticcall(abi.encodeWithSignature("currentVaults()"));
+    if (!s) _revert(returnData);
+    (baseVault, quoteVault) = abi.decode(returnData, (address, address));
+  }
+
   /**
    * @dev Reverts with returndata if present. Otherwise reverts with {FailedCall}.
    */
