@@ -26,21 +26,14 @@ contract OracleCombinerFactory {
    * @param _salt A salt used for address derivation
    * @return The address where the oracle would be deployed
    */
-  function computeOracleAddress(
-    address _oracle1,
-    address _oracle2,
-    address _oracle3,
-    address _oracle4,
-    bytes32 _salt
-  ) public view returns (address) {
+  function computeOracleAddress(address _oracle1, address _oracle2, address _oracle3, address _oracle4, bytes32 _salt)
+    public
+    view
+    returns (address)
+  {
     return Create2.computeAddress(
       _salt,
-      keccak256(
-        abi.encodePacked(
-          type(OracleCombiner).creationCode,
-          abi.encode(_oracle1, _oracle2, _oracle3, _oracle4)
-        )
-      )
+      keccak256(abi.encodePacked(type(OracleCombiner).creationCode, abi.encode(_oracle1, _oracle2, _oracle3, _oracle4)))
     );
   }
 
@@ -54,24 +47,16 @@ contract OracleCombinerFactory {
    * @return oracle The created OracleCombiner contract
    * @dev Any oracle address that is set to zero will be ignored in the tick calculation
    */
-  function create(
-    address _oracle1,
-    address _oracle2,
-    address _oracle3,
-    address _oracle4,
-    bytes32 _salt
-  ) public returns (OracleCombiner oracle) {
-    oracle = new OracleCombiner{salt: _salt}(
-      _oracle1,
-      _oracle2,
-      _oracle3,
-      _oracle4
-    );
-    
+  function create(address _oracle1, address _oracle2, address _oracle3, address _oracle4, bytes32 _salt)
+    public
+    returns (OracleCombiner oracle)
+  {
+    oracle = new OracleCombiner{salt: _salt}(_oracle1, _oracle2, _oracle3, _oracle4);
+
     isOracle[address(oracle)] = true;
-    
+
     emit MangroveVaultEvents.OracleCreated(msg.sender, address(oracle));
-    
+
     return oracle;
   }
-} 
+}

@@ -32,13 +32,11 @@ library DiaOracleV2Consumer {
    * @dev Handles decimal normalization between tokens with different decimal places
    * @dev Returns 0 if the oracle address is zero
    */
-  function getTick(
-    DiaOracleV2 _oracle,
-    bytes32 key,
-    uint256 priceDecimals,
-    uint256 baseDecimals,
-    uint256 quoteDecimals
-  ) internal view returns (int256) {
+  function getTick(DiaOracleV2 _oracle, bytes32 key, uint256 priceDecimals, uint256 baseDecimals, uint256 quoteDecimals)
+    internal
+    view
+    returns (int256)
+  {
     if (address(_oracle) == address(0)) return 0;
     uint256 price = getPrice(_oracle, key);
     if (baseDecimals > quoteDecimals) {

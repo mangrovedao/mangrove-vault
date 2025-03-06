@@ -39,7 +39,7 @@ contract MangroveChainlinkOracleFactoryV2 {
       type(MangroveChainlinkOracleV2).creationCode,
       abi.encode(baseFeed1, baseFeed2, quoteFeed1, quoteFeed2, baseVault, quoteVault)
     );
-    
+
     return Create2.computeAddress(salt, keccak256(bytecode));
   }
 

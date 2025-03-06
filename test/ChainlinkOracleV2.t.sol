@@ -142,47 +142,33 @@ contract ChainlinkOracleV2Test is Test {
     ChainlinkFeed memory baseFeed2;
     ChainlinkFeed memory quoteFeed1;
     ChainlinkFeed memory quoteFeed2;
-    
+
     // Deploy factory first to reduce stack depth
     MangroveChainlinkOracleFactoryV2 factory = new MangroveChainlinkOracleFactoryV2();
-    
+
     // Create assets and vaults
     ERC20 baseAsset = new ERC20("BaseAsset", "BASE");
     ERC20 quoteAsset = new ERC20("QuoteAsset", "QUOTE");
     ERC4626 baseVault = new ERC4626("BaseVault", "BVAULT", baseAsset);
     ERC4626 quoteVault = new ERC4626("QuoteVault", "QVAULT", quoteAsset);
-    
+
     // Create vault feeds
     ERC4626Feed memory baseVaultFeed = ERC4626Feed(address(baseVault), 1 ether);
     ERC4626Feed memory quoteVaultFeed = ERC4626Feed(address(quoteVault), 1 ether);
-    
+
     bytes32 salt = keccak256(abi.encodePacked("test_salt"));
-    
+
     // Compute expected address
-    address expectedAddress = factory.computeOracleAddress(
-      baseFeed1,
-      baseFeed2,
-      quoteFeed1,
-      quoteFeed2,
-      baseVaultFeed,
-      quoteVaultFeed,
-      salt
-    );
-    
+    address expectedAddress =
+      factory.computeOracleAddress(baseFeed1, baseFeed2, quoteFeed1, quoteFeed2, baseVaultFeed, quoteVaultFeed, salt);
+
     // Deploy the oracle using the factory
-    MangroveChainlinkOracleV2 oracle = factory.create(
-      baseFeed1,
-      baseFeed2,
-      quoteFeed1,
-      quoteFeed2,
-      baseVaultFeed,
-      quoteVaultFeed,
-      salt
-    );
-    
+    MangroveChainlinkOracleV2 oracle =
+      factory.create(baseFeed1, baseFeed2, quoteFeed1, quoteFeed2, baseVaultFeed, quoteVaultFeed, salt);
+
     // Verify that the deployed oracle is at the expected address
     assertEq(address(oracle), expectedAddress, "Deployed oracle should be at the expected address");
-    
+
     // Verify that the factory recognizes the oracle
     assertTrue(factory.isOracle(address(oracle)), "Factory should recognize the deployed oracle");
   }

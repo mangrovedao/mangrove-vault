@@ -89,9 +89,8 @@ contract DiaOracleTest is Test {
     ERC4626Feed memory emptyVaultFeed = ERC4626Feed({vault: address(0), conversionSample: 0});
 
     // Create oracle with empty feeds
-    MangroveDiaOracle oracle = new MangroveDiaOracle(
-      emptyFeed, emptyFeed, emptyFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed
-    );
+    MangroveDiaOracle oracle =
+      new MangroveDiaOracle(emptyFeed, emptyFeed, emptyFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed);
 
     // Should return tick 0 since all feeds are empty
     assertEq(Tick.unwrap(oracle.tick()), 0, "Empty oracle should return tick 0");
@@ -99,8 +98,13 @@ contract DiaOracleTest is Test {
 
   function test_diaOracleWithSingleFeed() public {
     // Create active feed for first base feed only
-    DiaFeed memory activeFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: SUPER_OETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory activeFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: SUPER_OETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
     DiaFeed memory emptyFeed =
       DiaFeed({oracle: address(0), key: bytes32(0), priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
@@ -109,9 +113,8 @@ contract DiaOracleTest is Test {
     ERC4626Feed memory emptyVaultFeed = ERC4626Feed({vault: address(0), conversionSample: 0});
 
     // Create oracle with single active feed
-    MangroveDiaOracle oracle = new MangroveDiaOracle(
-      activeFeed, emptyFeed, emptyFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed
-    );
+    MangroveDiaOracle oracle =
+      new MangroveDiaOracle(activeFeed, emptyFeed, emptyFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed);
 
     // Expected tick: log_1.0001(3012) ≈ 80107 (approximate)
     int256 tick = Tick.unwrap(oracle.tick());
@@ -120,11 +123,21 @@ contract DiaOracleTest is Test {
 
   function test_diaOracleWithCombinedFeeds() public {
     // Create feeds for base and quote
-    DiaFeed memory baseFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: SUPER_OETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory baseFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: SUPER_OETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
-    DiaFeed memory quoteFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: ETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory quoteFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: ETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
     DiaFeed memory emptyFeed =
       DiaFeed({oracle: address(0), key: bytes32(0), priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
@@ -134,9 +147,8 @@ contract DiaOracleTest is Test {
 
     // Create oracle with SUPEROETHB/USD as base and ETH/USD as quote
     // This should give us SUPEROETHB/ETH price which is approximately 3012/3000 = 1.004
-    MangroveDiaOracle oracle = new MangroveDiaOracle(
-      baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed
-    );
+    MangroveDiaOracle oracle =
+      new MangroveDiaOracle(baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed);
 
     // Expected tick: log_1.0001(3012/3000) = log_1.0001(1.004) ≈ 40 (approximate)
     int256 tick = Tick.unwrap(oracle.tick());
@@ -160,9 +172,8 @@ contract DiaOracleTest is Test {
     ERC4626Feed memory quoteVaultFeed = ERC4626Feed({vault: address(quoteVault), conversionSample: 1 ether});
 
     // Create oracle with only ERC4626 feeds
-    MangroveDiaOracle oracle = new MangroveDiaOracle(
-      emptyFeed, emptyFeed, emptyFeed, emptyFeed, baseVaultFeed, quoteVaultFeed
-    );
+    MangroveDiaOracle oracle =
+      new MangroveDiaOracle(emptyFeed, emptyFeed, emptyFeed, emptyFeed, baseVaultFeed, quoteVaultFeed);
 
     // Expected tick: log_1.0001(2/1) = log_1.0001(2) ≈ 6932 (approximate)
     int256 tick = Tick.unwrap(oracle.tick());
@@ -177,11 +188,21 @@ contract DiaOracleTest is Test {
     quoteVault.mint(address(this), 1 ether);
 
     // Create DIA feeds
-    DiaFeed memory baseFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: SUPER_OETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory baseFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: SUPER_OETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
-    DiaFeed memory quoteFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: ETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory quoteFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: ETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
     DiaFeed memory emptyFeed =
       DiaFeed({oracle: address(0), key: bytes32(0), priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
@@ -194,9 +215,8 @@ contract DiaOracleTest is Test {
     // Create oracle with both DIA and ERC4626 feeds
     // SUPEROETHB/USD * (baseVault/baseToken) / (ETH/USD * quoteVault/quoteToken)
     // (3012 * 2) / (3000 * 1) = 2.008
-    MangroveDiaOracle oracle = new MangroveDiaOracle(
-      baseFeed, emptyFeed, quoteFeed, emptyFeed, baseVaultFeed, quoteVaultFeed
-    );
+    MangroveDiaOracle oracle =
+      new MangroveDiaOracle(baseFeed, emptyFeed, quoteFeed, emptyFeed, baseVaultFeed, quoteVaultFeed);
 
     // Expected tick: log_1.0001((3012*2)/(3000*1)) = log_1.0001(2.008) ≈ 6971
     int256 tick = Tick.unwrap(oracle.tick());
@@ -205,11 +225,21 @@ contract DiaOracleTest is Test {
 
   function test_diaOracleWithPriceChange() public {
     // Create feeds
-    DiaFeed memory baseFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: SUPER_OETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory baseFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: SUPER_OETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
-    DiaFeed memory quoteFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: ETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory quoteFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: ETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
     DiaFeed memory emptyFeed =
       DiaFeed({oracle: address(0), key: bytes32(0), priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
@@ -218,9 +248,8 @@ contract DiaOracleTest is Test {
     ERC4626Feed memory emptyVaultFeed = ERC4626Feed({vault: address(0), conversionSample: 0});
 
     // Create oracle
-    MangroveDiaOracle oracle = new MangroveDiaOracle(
-      baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed
-    );
+    MangroveDiaOracle oracle =
+      new MangroveDiaOracle(baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed);
 
     // Get initial tick
     int256 initialTick = Tick.unwrap(oracle.tick());
@@ -238,11 +267,21 @@ contract DiaOracleTest is Test {
 
   function test_factoryComputeOracleAddress() public {
     // Create feeds
-    DiaFeed memory baseFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: SUPER_OETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory baseFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: SUPER_OETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
-    DiaFeed memory quoteFeed =
-      DiaFeed({oracle: address(mockDiaOracle), key: ETH_USD_KEY, priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
+    DiaFeed memory quoteFeed = DiaFeed({
+      oracle: address(mockDiaOracle),
+      key: ETH_USD_KEY,
+      priceDecimals: PRICE_DECIMALS,
+      baseDecimals: 18,
+      quoteDecimals: 18
+    });
 
     DiaFeed memory emptyFeed =
       DiaFeed({oracle: address(0), key: bytes32(0), priceDecimals: PRICE_DECIMALS, baseDecimals: 18, quoteDecimals: 18});
@@ -254,14 +293,12 @@ contract DiaOracleTest is Test {
     bytes32 salt = keccak256(abi.encodePacked("test_salt"));
 
     // Compute expected address
-    address expectedAddress = factory.computeOracleAddress(
-      baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed, salt
-    );
+    address expectedAddress =
+      factory.computeOracleAddress(baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed, salt);
 
     // Deploy the oracle using the factory
-    MangroveDiaOracle oracle = factory.create(
-      baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed, salt
-    );
+    MangroveDiaOracle oracle =
+      factory.create(baseFeed, emptyFeed, quoteFeed, emptyFeed, emptyVaultFeed, emptyVaultFeed, salt);
 
     // Verify address and factory recognition
     assertEq(address(oracle), expectedAddress, "Deployed oracle should be at the expected address");

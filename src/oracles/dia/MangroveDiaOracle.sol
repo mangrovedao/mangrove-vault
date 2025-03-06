@@ -176,9 +176,12 @@ contract MangroveDiaOracle is IOracle {
       baseFeed1Oracle.getTick(baseFeed1Key, baseFeed1PriceDecimals, baseFeed1BaseDecimals, baseFeed1QuoteDecimals)
         + baseFeed2Oracle.getTick(baseFeed2Key, baseFeed2PriceDecimals, baseFeed2BaseDecimals, baseFeed2QuoteDecimals)
         + baseVault.getTick(baseVaultConversionSample)
-        - quoteFeed1Oracle.getTick(quoteFeed1Key, quoteFeed1PriceDecimals, quoteFeed1BaseDecimals, quoteFeed1QuoteDecimals)
-        - quoteFeed2Oracle.getTick(quoteFeed2Key, quoteFeed2PriceDecimals, quoteFeed2BaseDecimals, quoteFeed2QuoteDecimals)
-        - quoteVault.getTick(quoteVaultConversionSample)
+        - quoteFeed1Oracle.getTick(
+          quoteFeed1Key, quoteFeed1PriceDecimals, quoteFeed1BaseDecimals, quoteFeed1QuoteDecimals
+        )
+        - quoteFeed2Oracle.getTick(
+          quoteFeed2Key, quoteFeed2PriceDecimals, quoteFeed2BaseDecimals, quoteFeed2QuoteDecimals
+        ) - quoteVault.getTick(quoteVaultConversionSample)
     );
   }
 }
