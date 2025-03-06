@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {MangroveChainlinkOracleV2, ChainlinkFeed, ERC4626Feed} from "./MangroveChainlinkOracleV2.sol";
 import {MangroveVaultEvents} from "../../../lib/MangroveVaultEvents.sol";
+import {Create2} from "@openzeppelin/contracts/utils/Create2.sol";
 
 /**
  * @title MangroveChainlinkOracleFactory
@@ -13,6 +14,34 @@ contract MangroveChainlinkOracleFactoryV2 {
    * @notice Mapping to track if an address is a created oracle
    */
   mapping(address => bool) public isOracle;
+
+  /**
+   * @notice Computes the address of a MangroveChainlinkOracleV2 before it is deployed
+   * @param baseFeed1 ChainlinkFeed struct for the first base feed
+   * @param baseFeed2 ChainlinkFeed struct for the second base feed
+   * @param quoteFeed1 ChainlinkFeed struct for the first quote feed
+   * @param quoteFeed2 ChainlinkFeed struct for the second quote feed
+   * @param baseVault ERC4626Feed struct for the base vault
+   * @param quoteVault ERC4626Feed struct for the quote vault
+   * @param salt Unique value for deterministic address generation
+   * @return The address where the oracle contract will be deployed
+   */
+  function computeOracleAddress(
+    ChainlinkFeed calldata baseFeed1,
+    ChainlinkFeed calldata baseFeed2,
+    ChainlinkFeed calldata quoteFeed1,
+    ChainlinkFeed calldata quoteFeed2,
+    ERC4626Feed calldata baseVault,
+    ERC4626Feed calldata quoteVault,
+    bytes32 salt
+  ) public view returns (address) {
+    bytes memory bytecode = abi.encodePacked(
+      type(MangroveChainlinkOracleV2).creationCode,
+      abi.encode(baseFeed1, baseFeed2, quoteFeed1, quoteFeed2, baseVault, quoteVault)
+    );
+    
+    return Create2.computeAddress(salt, keccak256(bytecode));
+  }
 
   /**
    * @notice Creates a new MangroveChainlinkOracle
