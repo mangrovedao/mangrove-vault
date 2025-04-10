@@ -76,9 +76,12 @@ contract MangroveERC4626KandelVault is MangroveVault {
     IERC4626Kandel(address(kandel)).adminWithdrawNative(amount, recipient);
   }
 
-  ///@notice Returns the current vault addresses for the base and quote tokens
-  ///@return baseVault The address of the vault for the base token
-  ///@return quoteVault The address of the vault for the quote token
+  /**
+   * @notice Returns the current vault addresses for the base and quote tokens
+   * @return baseVault The address of the vault for the base token
+   * @return quoteVault The address of the vault for the quote token
+   */
   function currentVaults() public view returns (address baseVault, address quoteVault) {
     return IERC4626Kandel(address(kandel)).currentVaults();
+  }
 }
