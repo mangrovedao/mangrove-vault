@@ -47,7 +47,11 @@ contract MangroveERC4626KandelVault is MangroveVault {
    * @param minAssetsOut The minimum amount of assets that must be withdrawn when moving funds to the new vault
    * @param minSharesOut The minimum amount of shares that must be withdrawn when moving funds to the new vault
    */
-  function setVaultForToken(IERC20 token, IERC4626 vault, uint minAssetsOut, uint256 minSharesOut) external virtual onlyOwner {
+  function setVaultForToken(IERC20 token, IERC4626 vault, uint256 minAssetsOut, uint256 minSharesOut)
+    external
+    virtual
+    onlyOwner
+  {
     IERC4626Kandel(address(kandel)).setVaultForToken(token, vault, minAssetsOut, minSharesOut);
   }
 
