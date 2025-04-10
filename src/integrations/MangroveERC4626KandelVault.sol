@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {MangroveVault, AbstractKandelSeeder, IERC20} from "../MangroveVault.sol";
 import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
+import {IERC4626Kandel} from "../interfaces/IERC4626Kandel.sol";
 
 /**
  * @title MangroveERC4626KandelVault
@@ -41,13 +42,17 @@ contract MangroveERC4626KandelVault is MangroveVault {
   /**
    * @notice Sets the vault for a given token.
    * @dev This function can only be called by the admin.
-   * @param token The token for which the vault is being set.
+   * @param token The token for which to set the vault.
    * @param vault The vault to be set for the token.
+   * @param minAssetsOut The minimum amount of assets that must be withdrawn when moving funds to the new vault
+   * @param minSharesOut The minimum amount of shares that must be withdrawn when moving funds to the new vault
    */
-  function setVaultForToken(IERC20 token, IERC4626 vault) external virtual onlyOwner {
-    (bool s, bytes memory returnData) =
-      address(kandel).call(abi.encodeWithSignature("setVaultForToken(address,address)", token, vault));
-    if (!s) _revert(returnData);
+  function setVaultForToken(IERC20 token, IERC4626 vault, uint256 minAssetsOut, uint256 minSharesOut)
+    external
+    virtual
+    onlyOwner
+  {
+    IERC4626Kandel(address(kandel)).setVaultForToken(token, vault, minAssetsOut, minSharesOut);
   }
 
   /**
@@ -58,10 +63,7 @@ contract MangroveERC4626KandelVault is MangroveVault {
    * @param recipient The address to which the tokens will be sent.
    */
   function adminWithdrawTokens(IERC20 token, uint256 amount, address recipient) public onlyOwner {
-    (bool s, bytes memory returnData) = address(kandel).call(
-      abi.encodeWithSignature("adminWithdrawTokens(address,uint256,address)", token, amount, recipient)
-    );
-    if (!s) _revert(returnData);
+    IERC4626Kandel(address(kandel)).adminWithdrawTokens(token, amount, recipient);
   }
 
   /**
@@ -71,33 +73,13 @@ contract MangroveERC4626KandelVault is MangroveVault {
    * @param recipient The address to which the native tokens will be sent.
    */
   function adminWithdrawNative(uint256 amount, address recipient) public onlyOwner {
-    (bool s, bytes memory returnData) =
-      address(kandel).call(abi.encodeWithSignature("adminWithdrawNative(uint256,address)", amount, recipient));
-    if (!s) _revert(returnData);
+    IERC4626Kandel(address(kandel)).adminWithdrawNative(amount, recipient);
   }
 
   ///@notice Returns the current vault addresses for the base and quote tokens
   ///@return baseVault The address of the vault for the base token
   ///@return quoteVault The address of the vault for the quote token
   function currentVaults() public view returns (address baseVault, address quoteVault) {
-    (bool s, bytes memory returnData) = address(kandel).staticcall(abi.encodeWithSignature("currentVaults()"));
-    if (!s) _revert(returnData);
-    (baseVault, quoteVault) = abi.decode(returnData, (address, address));
-  }
-
-  /**
-   * @dev Reverts with returndata if present. Otherwise reverts with {FailedCall}.
-   */
-  function _revert(bytes memory returndata) private pure {
-    // Look for revert reason and bubble it up if present
-    if (returndata.length > 0) {
-      // The easiest way to bubble the revert reason is using memory via assembly
-      assembly ("memory-safe") {
-        let returndata_size := mload(returndata)
-        revert(add(32, returndata), returndata_size)
-      }
-    } else {
-      revert FailedCall();
-    }
+    return IERC4626Kandel(address(kandel)).currentVaults();
   }
 }
