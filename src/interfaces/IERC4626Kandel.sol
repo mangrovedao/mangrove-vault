@@ -2,7 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC4626} from "@openzeppelin/contracts/token/ERC4626/IERC4626.sol";
+import {IERC4626} from "@openzeppelin/contracts/interfaces/IERC4626.sol";
 
 interface IERC4626Kandel {
   /// @notice Allows the admin to withdraw any tokens (and native) that is not the underlying ERC20 or ERC4626 of the strat.
