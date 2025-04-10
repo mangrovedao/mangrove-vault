@@ -81,5 +81,4 @@ contract MangroveERC4626KandelVault is MangroveVault {
   ///@return quoteVault The address of the vault for the quote token
   function currentVaults() public view returns (address baseVault, address quoteVault) {
     return IERC4626Kandel(address(kandel)).currentVaults();
-  }
 }
