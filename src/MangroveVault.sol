@@ -1047,7 +1047,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
     uint256 askGives;
     (distribution, params, bidGives, askGives) = kandel.distribution(Tick.wrap(_state.tickIndex0), _currentTick());
     (uint256 bidVolume, uint256 askVolume) = MGV.minVolumes(OLKey(BASE, QUOTE, TICK_SPACING), params.gasreq);
-    valid = bidGives >= bidVolume && askGives >= askVolume;
+    valid = (bidGives == 0 || bidGives >= bidVolume) && (askGives == 0 || askGives >= askVolume);
   }
 
   /**
