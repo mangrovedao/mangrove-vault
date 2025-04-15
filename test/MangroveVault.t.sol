@@ -652,13 +652,39 @@ contract MangroveVaultTest is Test {
   }
 
   function test_denssityTooLow() public {
-    (MangroveVault vault,, address kandel) = deployVault(0);
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+
+    vault.fundMangrove{value: 1 ether}();
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 1e6);
 
     vm.prank(owner);
     vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 0);
     vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 1);
+    vault.setPosition(
+      KandelPosition({
+        tickIndex0: tick,
+        tickOffset: 3,
+        fundsState: FundsState.Active,
+        params: Params({gasprice: 0, gasreq: 0, stepSize: 1, pricePoints: 10})
+      })
+    );
+  }
+
+  function test_outOfRangePosition() public {
+    (MangroveVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
+
+    Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) + 10);
+
+    mintWithSpecifiedQuoteAmount(vault, _market, 100_000e6); // 100_000 USD equivalent
+
+    vault.fundMangrove{value: 1 ether}();
+
+    vm.prank(owner);
+    vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 1);
+    vm.expectCall(kandel, abi.encodeCall(DirectWithBidsAndAsksDistribution.retractOffers, (0, 10)), 0);
     vault.setPosition(
       KandelPosition({
         tickIndex0: tick,

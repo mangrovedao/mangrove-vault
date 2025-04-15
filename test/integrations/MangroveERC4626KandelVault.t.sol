@@ -654,9 +654,11 @@ contract MangroveERC4626KandelVaultTest is Test {
   }
 
   function test_denssityTooLow() public {
-    (MangroveERC4626KandelVault vault,, address kandel) = deployVault(0);
+    (MangroveERC4626KandelVault vault, MarketWOracle memory _market, address kandel) = deployVault(0);
 
     Tick tick = Tick.wrap(Tick.unwrap(vault.currentTick()) - 10);
+
+    (uint256 baseAmountOut, uint256 quoteAmountOut,) = mintWithSpecifiedQuoteAmount(vault, _market, 1e6); // 1 USD equivalent
 
     vm.prank(owner);
     vm.expectCall(kandel, abi.encodeWithSelector(CoreKandel.populateChunk.selector), 0);
