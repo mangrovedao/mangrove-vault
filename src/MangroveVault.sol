@@ -505,6 +505,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    */
   function mint(uint256 mintAmount, uint256 baseAmountMax, uint256 quoteAmountMax)
     external
+    virtual
     whenNotPaused
     nonReentrant
     returns (uint256 shares, uint256 baseAmount, uint256 quoteAmount)
@@ -620,6 +621,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    */
   function burn(uint256 shares, uint256 minAmountBaseOut, uint256 minAmountQuoteOut)
     external
+    virtual
     whenNotPaused
     nonReentrant
     returns (uint256 amountBaseOut, uint256 amountQuoteOut)
@@ -910,7 +912,7 @@ contract MangroveVault is Ownable, ERC20, Pausable, ReentrancyGuard {
    * @return netBaseChange The net change in the BASE token balance
    * @return netQuoteChange The net change in the QUOTE token balance
    */
-  function _swap(address target, bytes calldata data, uint256 amountOut, uint256 amountInMin, bool sell)
+  function _swap(address target, bytes memory data, uint256 amountOut, uint256 amountInMin, bool sell)
     internal
     returns (int256 netBaseChange, int256 netQuoteChange)
   {
